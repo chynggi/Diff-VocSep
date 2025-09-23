@@ -4,8 +4,10 @@ seed: 42
 # 데이터
 data:
   musdb_root: ./data/musdb18
+  musdbhq_root: ./data/musdb18hq
   segment_seconds: 4.0
   mono: true
+  dataset: musdb  # musdb | musdbhq
 
 # 오디오 / STFT
 audio:

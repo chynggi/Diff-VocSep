@@ -30,6 +30,34 @@ python -c "import musdb; musdb.DB(root='data/musdb18', download=True)"
 python train.py --config config.yaml
 ```
 
+Use MUSDB18-HQ (local folders with mixture.wav and stems):
+
+1) Folder layout per track
+
+```
+<musdbhq_root>/
+	<artist> - <title>/
+		mixture.wav
+		drums.wav
+		bass.wav
+		vocals.wav
+		other.wav
+```
+
+2) Set config
+
+```yaml
+data:
+	dataset: musdbhq
+	musdbhq_root: ./data/musdb18hq
+```
+
+3) Run train (same command)
+
+```pwsh
+python train.py --config config.yaml
+```
+
 Training logs (TensorBoard):
 
 ```pwsh
@@ -50,7 +78,7 @@ Notes
 
 ## 원본 논문 출처
 
-- **논문 제목:** Diff-MSST: [논문 링크](https://s-space.snu.ac.kr/handle/10371/222058?mode=simple)
+- **논문 제목:** 악기 종류에 무관한 보컬 분리를 위한 디퓨전 기반 반사실적 생성 기법 : A Diffusion based Counterfactual Generation Method for Instrument-Independent Vocal Separation: [논문 링크](https://s-space.snu.ac.kr/handle/10371/222058?mode=simple)
 - **PDF:** [다운로드](https://dcollection.snu.ac.kr/public_resource/pdf/000000188545_20250923132518.pdf)
 - **저자:** 강명오
 - **기관:** 서울대학교 대학원

@@ -6,7 +6,7 @@ from torch import optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.data_loader import create_loader
+from utils.data_loader import create_loader, create_musdbhq_loader
 from utils.audio_utils import AudioProcessor
 from models.counterfactual import CounterfactualDiffusion
 
@@ -24,31 +24,57 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Dataloaders
-    train_loader = create_loader(
-        root_dir=cfg["data"]["musdb_root"],
-        subset="train",
-        batch_size=cfg["train"]["batch_size"],
-        segment_seconds=cfg["data"]["segment_seconds"],
-        sr=cfg["audio"]["sample_rate"],
-        n_fft=cfg["audio"]["n_fft"],
-        hop=cfg["audio"]["hop_length"],
-        win_length=cfg["audio"]["win_length"],
-        center=cfg["audio"].get("center", True),
-        num_workers=0,
-    )
-    val_loader = create_loader(
-        root_dir=cfg["data"]["musdb_root"],
-        subset="test",  # MSST와 유사하게 별도 검증 세트 사용 가능
-        batch_size=1,
-        segment_seconds=cfg["data"]["segment_seconds"],
-        sr=cfg["audio"]["sample_rate"],
-        n_fft=cfg["audio"]["n_fft"],
-        hop=cfg["audio"]["hop_length"],
-        win_length=cfg["audio"]["win_length"],
-        center=cfg["audio"].get("center", True),
-        num_workers=0,
-    )
+    # Dataloaders (musdb or musdbhq)
+    dataset_kind = cfg["data"].get("dataset", "musdb").lower()
+    if dataset_kind == "musdbhq":
+        train_loader = create_musdbhq_loader(
+            root_dir=cfg["data"]["musdbhq_root"],
+            batch_size=cfg["train"]["batch_size"],
+            segment_seconds=cfg["data"]["segment_seconds"],
+            sr=cfg["audio"]["sample_rate"],
+            n_fft=cfg["audio"]["n_fft"],
+            hop=cfg["audio"]["hop_length"],
+            win_length=cfg["audio"]["win_length"],
+            center=cfg["audio"].get("center", True),
+            num_workers=0,
+        )
+        # val 로더는 간단히 동일 구조에서 batch_size=1로 생성
+        val_loader = create_musdbhq_loader(
+            root_dir=cfg["data"]["musdbhq_root"],
+            batch_size=1,
+            segment_seconds=cfg["data"]["segment_seconds"],
+            sr=cfg["audio"]["sample_rate"],
+            n_fft=cfg["audio"]["n_fft"],
+            hop=cfg["audio"]["hop_length"],
+            win_length=cfg["audio"]["win_length"],
+            center=cfg["audio"].get("center", True),
+            num_workers=0,
+        )
+    else:
+        train_loader = create_loader(
+            root_dir=cfg["data"]["musdb_root"],
+            subset="train",
+            batch_size=cfg["train"]["batch_size"],
+            segment_seconds=cfg["data"]["segment_seconds"],
+            sr=cfg["audio"]["sample_rate"],
+            n_fft=cfg["audio"]["n_fft"],
+            hop=cfg["audio"]["hop_length"],
+            win_length=cfg["audio"]["win_length"],
+            center=cfg["audio"].get("center", True),
+            num_workers=0,
+        )
+        val_loader = create_loader(
+            root_dir=cfg["data"]["musdb_root"],
+            subset="test",  # MSST와 유사하게 별도 검증 세트 사용 가능
+            batch_size=1,
+            segment_seconds=cfg["data"]["segment_seconds"],
+            sr=cfg["audio"]["sample_rate"],
+            n_fft=cfg["audio"]["n_fft"],
+            hop=cfg["audio"]["hop_length"],
+            win_length=cfg["audio"]["win_length"],
+            center=cfg["audio"].get("center", True),
+            num_workers=0,
+        )
 
     # Model
     model = CounterfactualDiffusion(
