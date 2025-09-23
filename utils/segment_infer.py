@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import torch
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None  # Safe fallback if tqdm isn't available
 
 
 @torch.no_grad()
@@ -14,6 +18,7 @@ def spectrogram_segment_infer(
     overlap_frames: int = 0,
     device: Optional[torch.device] = None,
     generate_kwargs: Optional[Dict] = None,
+    show_progress: bool = True,
 ) -> torch.Tensor:
     """Run model.generate_instrumental on spectrogram in time segments and stitch results.
 
@@ -40,14 +45,32 @@ def spectrogram_segment_infer(
     step = max(1, seg - ov)
 
     if seg >= T:
-        # single-shot
-        return model.generate_instrumental(mix_norm.to(device), **generate_kwargs).to(mix_norm.dtype).cpu() if device.type != "cpu" else model.generate_instrumental(mix_norm, **generate_kwargs)
+        # single-shot; allow internal diffusion progress if requested
+        kwargs = dict(generate_kwargs)
+        kwargs["progress"] = bool(show_progress)
+        return (
+            model.generate_instrumental(mix_norm.to(device), **kwargs).to(mix_norm.dtype).cpu()
+            if device.type != "cpu"
+            else model.generate_instrumental(mix_norm, **kwargs)
+        )
 
     out = torch.zeros_like(mix_norm)
     weight = torch.zeros((T,), device=mix_norm.device, dtype=mix_norm.dtype)
 
+    # Precompute segment start indices to use with tqdm
+    starts = []
     t = 0
     while t < T:
+        starts.append(t)
+        if t + seg >= T:
+            break
+        t += step
+
+    iterator = starts
+    if show_progress and tqdm is not None:
+        iterator = tqdm(iterator, desc="Segments", unit="seg")
+
+    for t in iterator:
         end = min(t + seg, T)
         cur_len = end - t
         seg_tensor = mix_norm[..., t:end]
@@ -57,14 +80,13 @@ def spectrogram_segment_infer(
             seg_tensor = torch.nn.functional.pad(seg_tensor, (0, pad))
 
         seg_tensor = seg_tensor.to(device)
-        pred = model.generate_instrumental(seg_tensor, **generate_kwargs)
+        # Disable inner diffusion bar to avoid nested bars; we show per-segment bar here
+        kwargs = dict(generate_kwargs)
+        kwargs["progress"] = False
+        pred = model.generate_instrumental(seg_tensor, **kwargs)
         pred = pred[..., :cur_len]  # crop padding
         out[..., t:end] += pred.to(out.dtype).to(out.device)
         weight[t:end] += 1.0
-
-        if end == T:
-            break
-        t += step
 
     # Normalize overlap by counts
     weight = weight.clamp_min(1.0).view(1, 1, 1, T)

@@ -39,6 +39,7 @@ class CounterfactualDiffusion(nn.Module):
         use_ddim: bool = False,
         ddim_steps: int = 50,
         eta: float = 0.0,
+        progress: bool = False,
     ) -> torch.Tensor:
         # mixture_spec: (B, 1, F, T) normalized magnitude
         b = mixture_spec.size(0)
@@ -51,5 +52,6 @@ class CounterfactualDiffusion(nn.Module):
             use_ddim=use_ddim,
             ddim_steps=ddim_steps,
             eta=eta,
+            progress=progress,
         )
         return instrumental

@@ -16,6 +16,7 @@ def parse_args():
     p.add_argument("--output", type=str, default="vocals.wav")
     p.add_argument("--segment-seconds", type=float, default=0.0, help="Segment length in seconds for chunked inference (0 for full).")
     p.add_argument("--overlap-seconds", type=float, default=0.0, help="Overlap in seconds between segments.")
+    p.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars during inference.")
     return p.parse_args()
 
 
@@ -51,6 +52,7 @@ def main():
             use_ddim=cfg["diffusion"].get("use_ddim", False),
             ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
             eta=cfg["diffusion"].get("eta", 0.0),
+            progress=not args.no_progress,
         )
         seg_secs = float(args.segment_seconds)
         if seg_secs and seg_secs > 0:
@@ -66,6 +68,7 @@ def main():
                 overlap_frames=ov_frames,
                 device=device,
                 generate_kwargs=gen_kwargs,
+                show_progress=not args.no_progress,
             )
         else:
             instrumental_norm = model.generate_instrumental(mix_bchw, **gen_kwargs)

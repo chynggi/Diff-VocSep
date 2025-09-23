@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 
 
 @dataclass
@@ -61,6 +65,7 @@ class GaussianDiffusion(nn.Module):
         cond: torch.Tensor,
         steps: int = 50,
         eta: float = 0.0,
+        progress: bool = False,
     ) -> torch.Tensor:
         """DDIM sampling with optional stochasticity via eta.
 
@@ -81,7 +86,10 @@ class GaussianDiffusion(nn.Module):
             # include last index (T-1)
             schedule = torch.linspace(0, self.timesteps - 1, steps, device=device).long().tolist()
         # iterate backwards
-        for i in reversed(range(len(schedule))):
+        iterator = reversed(range(len(schedule)))
+        if progress and tqdm is not None:
+            iterator = tqdm(iterator, total=len(schedule), desc="DDIM", unit="step")
+        for i in iterator:
             t_i = schedule[i]
             t = torch.full((shape[0],), t_i, device=device, dtype=torch.long)
             eps = model(torch.cat([x, cond], dim=1), t)
@@ -123,6 +131,7 @@ class GaussianDiffusion(nn.Module):
         use_ddim: bool = False,
         ddim_steps: int = 50,
         eta: float = 0.0,
+        progress: bool = False,
     ) -> torch.Tensor:
         # model should accept concat([x, cond]) as input channels when cond is provided
         if cond is None:
@@ -131,10 +140,13 @@ class GaussianDiffusion(nn.Module):
             device = cond.device
 
         if use_ddim and cond is not None:
-            return self.sample_ddim(model, shape, cond=cond, steps=ddim_steps, eta=eta)
+            return self.sample_ddim(model, shape, cond=cond, steps=ddim_steps, eta=eta, progress=progress)
 
         x = torch.randn(shape, device=device)
-        for i in reversed(range(self.timesteps)):
+        iterator = reversed(range(self.timesteps))
+        if progress and tqdm is not None:
+            iterator = tqdm(iterator, total=self.timesteps, desc="DDPM", unit="step")
+        for i in iterator:
             t = torch.full((shape[0],), i, device=x.device, dtype=torch.long)
             x = self.p_sample(model, x, t, cond=cond)
         return x
