@@ -47,3 +47,12 @@ Notes
 - Normalization: log1p + min-max per-batch; keep stats for inverse before iSTFT.
 - This scaffold aims for clarity, not SOTA performance. Tune configs, add DDIM, metrics, and logging as needed.
 - Validation/Checkpoint: validates every 1000 steps and saves last/best checkpoints (configurable in config.yaml).
+
+## 원본 논문 출처
+
+- **논문 제목:** Diff-MSST: [논문 링크](https://s-space.snu.ac.kr/handle/10371/222058?mode=simple)
+- **PDF:** [다운로드](https://dcollection.snu.ac.kr/public_resource/pdf/000000188545_20250923132518.pdf)
+- **저자:** 강명오
+- **기관:** 서울대학교 대학원
+
+해당 논문을 참고하여 프로젝트를 개발하였습니다.

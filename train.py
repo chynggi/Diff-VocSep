@@ -69,30 +69,51 @@ def main():
 
     model.train()
     global_step = 0
-    best_val = float("inf")
+    best_sdr = float("-inf")
 
     def validate(max_batches: int = 10):
         model.eval()
-        total = 0.0
+        import numpy as np
+        from utils.metrics import evaluate_waveforms
+        from utils.audio_utils import AudioProcessor
+        total_sdr = 0.0
         count = 0
         with torch.no_grad():
             for i, batch in enumerate(val_loader):
-                mix = batch["mixture"].to(device)
+                mix = batch["mixture"].to(device)   # (1,1,F,T)
                 acc = batch["accompaniment"].to(device)
-                b = mix.size(0)
-                t = torch.randint(0, model.diffusion.timesteps, (b,), device=device, dtype=torch.long)
-                x_start = acc
-                noise = torch.randn_like(x_start)
-                x_t = model.diffusion.q_sample(x_start, t, noise=noise)
-                x_in = torch.cat([x_t, mix], dim=1)
-                pred_noise = model(x_in, t)
-                l = torch.nn.functional.l1_loss(pred_noise, noise).item()
-                total += l
-                count += 1
+                # 샘플링으로 악기 스펙 추정 -> 보컬 = 혼합 - 악기
+                instrumental_norm = model.generate_instrumental(mix)
+                vocals_est_norm = mix - instrumental_norm
+
+                stats = batch.get("mix_norm_stats")
+                if stats is not None:
+                    s_min = float(stats[0].item())
+                    s_max = float(stats[1].item())
+                else:
+                    s_min, s_max = -1.0, 1.0
+
+                proc = AudioProcessor(sr=cfg["audio"]["sample_rate"], n_fft=cfg["audio"]["n_fft"], hop_length=cfg["audio"]["hop_length"], win_length=cfg["audio"]["win_length"], center=cfg["audio"].get("center", True))
+                mix_phase = batch["mixture_phase"].squeeze(0).cpu()
+                voc_mag = proc.denormalize_mag(vocals_est_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                voc_wav = proc.istft(voc_mag, mix_phase).numpy()
+
+                # GT 보컬 파형이 없어서 proxy로 mixture - accompaniment(denorm, iSTFT)를 사용
+                acc_mag = proc.denormalize_mag(acc.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                acc_wav = proc.istft(acc_mag, mix_phase).numpy()
+                mix_mag = proc.denormalize_mag(mix.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                mix_wav = proc.istft(mix_mag, mix_phase).numpy()
+                target_voc = mix_wav - acc_wav
+
+                m = evaluate_waveforms(voc_wav, target_voc)
+                sdr = m.get("SDR", float("nan"))
+                if not np.isnan(sdr):
+                    total_sdr += sdr
+                    count += 1
                 if i + 1 >= max_batches:
                     break
         model.train()
-        return total / max(1, count)
+        return (total_sdr / max(1, count)) if count > 0 else float("nan")
 
     for epoch in range(cfg["train"]["epochs"]):
         for i, batch in enumerate(train_loader):
@@ -126,15 +147,15 @@ def main():
 
             # Validate and checkpoint every N steps
             if cfg["train"].get("val_every_steps") and (global_step % cfg["train"]["val_every_steps"] == 0) and global_step > 0:
-                val_loss = validate(cfg["train"].get("val_batches", 10))
+                val_sdr = validate(cfg["train"].get("val_batches", 10))
                 if writer:
-                    writer.add_scalar("val/loss", val_loss, global_step)
-                print(f"Validation at step {global_step}: loss {val_loss:.4f}")
+                    writer.add_scalar("val/SDR", val_sdr, global_step)
+                print(f"Validation at step {global_step}: SDR {val_sdr:.3f} dB")
                 os.makedirs("checkpoints", exist_ok=True)
                 if cfg["log"].get("save_last", True):
                     torch.save(model.state_dict(), os.path.join("checkpoints", "last.pt"))
-                if val_loss < best_val and cfg["log"].get("save_best", True):
-                    best_val = val_loss
+                if (val_sdr > best_sdr) and cfg["log"].get("save_best", True):
+                    best_sdr = val_sdr
                     torch.save(model.state_dict(), os.path.join("checkpoints", "best.pt"))
             global_step += 1
 
