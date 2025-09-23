@@ -8,11 +8,21 @@ except Exception:  # optional dependency at runtime
 
 
 def _to_1d(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x)
-    if x.ndim == 1:
-        return x
-    # If stereo or batched, pick the first channel/sample
-    return np.squeeze(x)[..., 0]
+    arr = np.asarray(x)
+    # Handle empty
+    if arr.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    # Already 1D
+    if arr.ndim == 1:
+        return arr
+    # Try to drop singleton dims then progressively index first element until 1D
+    arr = np.squeeze(arr)
+    if arr.ndim == 0:
+        # Scalar -> make length-1 vector
+        return np.atleast_1d(arr)
+    while arr.ndim > 1:
+        arr = arr[0]
+    return arr
 
 
 def _si_sdr(estimated: np.ndarray, target: np.ndarray, eps: float = 1e-8) -> float:
@@ -25,8 +35,11 @@ def _si_sdr(estimated: np.ndarray, target: np.ndarray, eps: float = 1e-8) -> flo
     Returns:
         SI-SDR in dB (float)
     """
-    e = estimated.astype(np.float64)
-    t = target.astype(np.float64)
+    e = np.asarray(estimated, dtype=np.float64)
+    t = np.asarray(target, dtype=np.float64)
+    # Guard against invalid shapes
+    if e.ndim == 0 or t.ndim == 0 or e.size == 0 or t.size == 0:
+        return float("nan")
     # Align lengths
     L = min(e.shape[-1], t.shape[-1])
     if L <= 0:
