@@ -5,7 +5,7 @@ seed: 42
 data:
   musdb_root: ./data/musdb18
   musdbhq_root: ./data/musdb18hq
-  segment_seconds: 4.0
+  segment_seconds: 2.0
   mono: true
   dataset: musdbhq  # musdb | musdbhq
 
@@ -21,15 +21,15 @@ audio:
 
 # 학습
 train:
-  batch_size: 4
-  epochs: 5
+  batch_size: 2
+  epochs: 1000
   lr: 2.0e-4
   weight_decay: 1.0e-2
   grad_clip: 1.0
   amp: false
   log_interval: 50
-  val_every_steps: 1000
-  val_batches: 10
+  val_every_steps: 75
+  val_batches: 2
   loss_voc_weight: 0.5
 
 # 확산

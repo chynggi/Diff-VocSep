@@ -2,6 +2,7 @@ import argparse
 import yaml
 import torch
 import torchaudio
+import importlib
 
 from utils.audio_utils import AudioProcessor
 from models.counterfactual import CounterfactualDiffusion
@@ -20,11 +21,14 @@ def parse_args():
 
 
 def main():
+    # lazy import torch_xla
+    xm = importlib.import_module("torch_xla.core.xla_model")
+
     args = parse_args()
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = xm.xla_device()
 
     model = CounterfactualDiffusion(
         in_channels=cfg["model"]["in_channels"],
@@ -36,16 +40,23 @@ def main():
         beta_end=cfg["diffusion"]["beta_end"],
     ).to(device)
 
-    sd = torch.load(args.model_path, map_location=device)
+    sd = torch.load(args.model_path, map_location="cpu")
     model.load_state_dict(sd, strict=False)
     model.eval()
 
-    proc = AudioProcessor(sr=cfg["audio"]["sample_rate"], n_fft=cfg["audio"]["n_fft"], hop_length=cfg["audio"]["hop_length"], win_length=cfg["audio"]["win_length"], center=cfg["audio"].get("center", True))    
-    wav, sr = proc.load_audio(args.input, target_sr=cfg["audio"]["sample_rate"]) 
+    proc = AudioProcessor(
+        sr=cfg["audio"]["sample_rate"],
+        n_fft=cfg["audio"]["n_fft"],
+        hop_length=cfg["audio"]["hop_length"],
+        win_length=cfg["audio"]["win_length"],
+        center=cfg["audio"].get("center", True),
+    )
+
+    wav, _ = proc.load_audio(args.input, target_sr=cfg["audio"]["sample_rate"])
     mag, phase = proc.stft(wav)
     mag_norm, s_min, s_max = proc.normalize_mag(mag)
 
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(device_type="xla", dtype=torch.bfloat16, enabled=True):
         mix_bchw = mag_norm.unsqueeze(0).unsqueeze(0).to(device)
         gen_kwargs = dict(
             use_ddim=cfg["diffusion"].get("use_ddim", False),
@@ -54,7 +65,6 @@ def main():
         )
         seg_secs = float(args.segment_seconds)
         if seg_secs and seg_secs > 0:
-            # Convert seconds to STFT frames: frames ~= ceil((N - win)/hop) + 1, approximate via T from mag
             frames_per_sec = mag.shape[-1] / (wav.shape[-1] / cfg["audio"]["sample_rate"] + 1e-8)
             seg_frames = max(1, int(round(seg_secs * frames_per_sec)))
             ov_secs = max(0.0, float(args.overlap_seconds))
@@ -69,7 +79,6 @@ def main():
             )
         else:
             instrumental_norm = model.generate_instrumental(mix_bchw, **gen_kwargs)
-        # vocals = mix - instrumental in normalized space
         vocals_norm = torch.clamp(mix_bchw - instrumental_norm, -1.0, 1.0)
         vocals_mag = proc.denormalize_mag(vocals_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
         vocals_wav = proc.istft(vocals_mag, phase)

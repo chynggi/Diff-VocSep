@@ -17,3 +17,5 @@ pyyaml
 gdown
 py7zr
 tqdm
+# TPU-only (install on Colab/GCP TPU VMs)
+# torch-xla

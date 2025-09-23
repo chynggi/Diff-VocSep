@@ -3,6 +3,7 @@ import argparse
 import yaml
 import torch
 from torch import optim
+import numpy as np
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm, trange
@@ -10,6 +11,7 @@ from tqdm.auto import tqdm, trange
 from utils.data_loader import create_loader, create_musdbhq_loader
 from utils.data_setup import ensure_musdbhq
 from utils.audio_utils import AudioProcessor
+from utils.metrics import evaluate_waveforms
 from models.counterfactual import CounterfactualDiffusion
 
 
@@ -104,9 +106,6 @@ def main():
 
     def validate(max_batches: int = 10):
         model.eval()
-        import numpy as np
-        from utils.metrics import evaluate_waveforms
-        from utils.audio_utils import AudioProcessor
         total_sdr = 0.0
         count = 0
         with torch.no_grad():
@@ -162,7 +161,7 @@ def main():
                 mix_wav = proc.istft(mix_mag, mix_phase).numpy()
                 target_voc = mix_wav - acc_wav
 
-                m = evaluate_waveforms(voc_wav, target_voc)
+                m = evaluate_waveforms(voc_wav, target_voc, sr=cfg["audio"]["sample_rate"], use_museval=False)
                 sdr = m.get("SDR", float("nan"))
                 if not np.isnan(sdr):
                     total_sdr += sdr
@@ -175,6 +174,9 @@ def main():
         model.train()
         return (total_sdr / max(1, count)) if count > 0 else float("nan")
 
+
+
+    # Training loop
     epochs = cfg["train"]["epochs"]
     steps_per_epoch = len(train_loader) if hasattr(train_loader, "__len__") else None
     epoch_bar = trange(epochs, desc="Epochs", dynamic_ncols=True)

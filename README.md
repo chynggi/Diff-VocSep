@@ -94,6 +94,29 @@ Notes
 - Validation/Checkpoint: validates every 1000 steps and saves last/best checkpoints (configurable in config.yaml).
  - Progress bars use `tqdm` (auto backend). Console prints during validation use `tqdm.write()` to avoid breaking the bars.
 
+## TPU Training (torch-xla)
+
+TPU는 로컬 Windows에서 직접 사용할 수 없고, Google Colab(TPU v2/v3) 또는 GCP TPU VM에서 사용하세요. 본 레포는 TPU 전용 학습 스크립트 `train_tpu.py`를 제공합니다.
+
+1) TPU 환경에서 torch-xla 설치
+
+```pwsh
+pip install "torch==2.*" "torchvision==0.*" "torchaudio==2.*"
+pip install torch-xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+```
+
+2) 학습 실행
+
+```pwsh
+python train_tpu.py --config config.yaml
+```
+
+메모
+- 분산 학습은 XLA 프로세스별로 자동 스폰됩니다(`xmp.spawn`). 데이터셋은 `DistributedSampler`로 분할됩니다.
+- AMP는 XLA의 `bfloat16` 자동 캐스트를 사용합니다.
+- 검증/체크포인트는 마스터(rank 0)에서만 수행해 간단히 집계합니다.
+- Colab에서는 런타임 유형을 TPU로 전환 후 위 명령을 실행하세요.
+
 ### Troubleshooting
 - GroupNorm errors: channel counts are handled adaptively, but if you modify `channels_mult`, ensure at least three scales (e.g., `[1,2,4]`).
 - Missing optional deps (museval, gdown, py7zr) will disable specific features; install them if needed.
