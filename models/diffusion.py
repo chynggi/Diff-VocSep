@@ -30,9 +30,10 @@ class GaussianDiffusion(nn.Module):
         sqrt_om = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
         return sqrt_ac * x_start + sqrt_om * noise
 
-    def p_mean_variance(self, model: nn.Module, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        # Model predicts noise (epsilon) on current x
-        eps = model(x, t)
+    def p_mean_variance(self, model: nn.Module, x: torch.Tensor, t: torch.Tensor, cond: torch.Tensor | None = None) -> torch.Tensor:
+        # Model predicts noise (epsilon) on current x; if cond is provided, pass concat([x, cond]) into the model
+        x_in = torch.cat([x, cond], dim=1) if cond is not None else x
+        eps = model(x_in, t)
         beta_t = self.betas[t].view(-1, 1, 1, 1)
         alpha_t = (1.0 - beta_t)
         alpha_bar_t = self.alphas_cumprod[t].view(-1, 1, 1, 1)
@@ -42,8 +43,8 @@ class GaussianDiffusion(nn.Module):
         return mean, var
 
     @torch.no_grad()
-    def p_sample(self, model: nn.Module, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        mean, var = self.p_mean_variance(model, x, t)
+    def p_sample(self, model: nn.Module, x: torch.Tensor, t: torch.Tensor, cond: torch.Tensor | None = None) -> torch.Tensor:
+        mean, var = self.p_mean_variance(model, x, t, cond=cond)
         if (t == 0).all():
             return mean
         noise = torch.randn_like(x)
@@ -83,8 +84,7 @@ class GaussianDiffusion(nn.Module):
         for i in reversed(range(len(schedule))):
             t_i = schedule[i]
             t = torch.full((shape[0],), t_i, device=device, dtype=torch.long)
-            x_in = torch.cat([x, cond], dim=1)
-            eps = model(x_in, t)
+            eps = model(torch.cat([x, cond], dim=1), t)
 
             alpha_bar_t = self._get_alpha_bar(t)
             sqrt_ab_t = torch.sqrt(alpha_bar_t)
@@ -136,6 +136,5 @@ class GaussianDiffusion(nn.Module):
         x = torch.randn(shape, device=device)
         for i in reversed(range(self.timesteps)):
             t = torch.full((shape[0],), i, device=x.device, dtype=torch.long)
-            x_in = torch.cat([x, cond], dim=1) if cond is not None else x
-            x = self.p_sample(model, x_in, t)
+            x = self.p_sample(model, x, t, cond=cond)
         return x
