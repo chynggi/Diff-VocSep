@@ -30,6 +30,12 @@ python -c "import musdb; musdb.DB(root='data/musdb18', download=True)"
 python train.py --config config.yaml
 ```
 
+During training you'll see two progress bars:
+- An outer "Epochs" bar with average loss and best SDR.
+- An inner per-epoch "Train e/E" bar with current loss and learning rate.
+
+Validation also shows a short progress bar (up to `train.val_batches`) with the running SDR.
+
 Key training options in `config.yaml`:
 - train.loss_voc_weight: weight for auxiliary vocal loss (mixture − x0_pred vs GT vocals)
 - diffusion.timesteps: total DDPM steps used in training
@@ -86,6 +92,7 @@ Notes
 - Normalization: log1p + min-max per-batch; keep stats for inverse before iSTFT.
 - This scaffold aims for clarity, not SOTA performance. Tune configs, DDIM steps, metrics, and logging as needed.
 - Validation/Checkpoint: validates every 1000 steps and saves last/best checkpoints (configurable in config.yaml).
+ - Progress bars use `tqdm` (auto backend). Console prints during validation use `tqdm.write()` to avoid breaking the bars.
 
 ### Troubleshooting
 - GroupNorm errors: channel counts are handled adaptively, but if you modify `channels_mult`, ensure at least three scales (e.g., `[1,2,4]`).

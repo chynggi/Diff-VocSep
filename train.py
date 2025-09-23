@@ -5,6 +5,7 @@ import torch
 from torch import optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
+from tqdm.auto import tqdm, trange
 
 from utils.data_loader import create_loader, create_musdbhq_loader
 from utils.data_setup import ensure_musdbhq
@@ -109,7 +110,10 @@ def main():
         total_sdr = 0.0
         count = 0
         with torch.no_grad():
-            for i, batch in enumerate(val_loader):
+            total = min(max_batches, len(val_loader)) if hasattr(val_loader, "__len__") else max_batches
+            val_iter = enumerate(val_loader)
+            val_pbar = tqdm(val_iter, total=total, desc="Validate", dynamic_ncols=True, leave=False)
+            for i, batch in val_pbar:
                 mix = batch["mixture"].to(device)   # (1,1,F,T)
                 acc = batch["accompaniment"].to(device)
                 # 샘플링으로 악기 스펙 추정 -> 보컬 = 혼합 - 악기
@@ -147,11 +151,24 @@ def main():
                     count += 1
                 if i + 1 >= max_batches:
                     break
+                if count > 0:
+                    val_pbar.set_postfix(SDR=(total_sdr / max(1, count)))
+            val_pbar.close()
         model.train()
         return (total_sdr / max(1, count)) if count > 0 else float("nan")
 
-    for epoch in range(cfg["train"]["epochs"]):
-        for i, batch in enumerate(train_loader):
+    epochs = cfg["train"]["epochs"]
+    steps_per_epoch = len(train_loader) if hasattr(train_loader, "__len__") else None
+    epoch_bar = trange(epochs, desc="Epochs", dynamic_ncols=True)
+    for epoch in epoch_bar:
+        running_loss = 0.0
+        # step-level progress bar for this epoch
+        if steps_per_epoch is not None:
+            step_bar = tqdm(train_loader, total=steps_per_epoch, desc=f"Train {epoch+1}/{epochs}", dynamic_ncols=True, leave=False)
+        else:
+            step_bar = tqdm(train_loader, desc=f"Train {epoch+1}/{epochs}", dynamic_ncols=True, leave=False)
+
+        for i, batch in enumerate(step_bar):
             mix = batch["mixture"].to(device)
             acc = batch["accompaniment"].to(device)
 
@@ -196,14 +213,19 @@ def main():
             if writer and (global_step % cfg["train"]["log_interval"] == 0):
                 writer.add_scalar("train/loss", loss.item(), global_step)
             if global_step % cfg["train"]["log_interval"] == 0:
-                print(f"epoch {epoch} step {global_step} loss {loss.item():.4f}")
+                # update progress bar with current loss and LR
+                lr_val = opt.param_groups[0]["lr"] if len(opt.param_groups) > 0 else None
+                postfix = {"loss": f"{loss.item():.4f}"}
+                if lr_val is not None:
+                    postfix["lr"] = f"{lr_val:.2e}"
+                step_bar.set_postfix(postfix)
 
             # Validate and checkpoint every N steps
             if cfg["train"].get("val_every_steps") and (global_step % cfg["train"]["val_every_steps"] == 0) and global_step > 0:
                 val_sdr = validate(cfg["train"].get("val_batches", 10))
                 if writer:
                     writer.add_scalar("val/SDR", val_sdr, global_step)
-                print(f"Validation at step {global_step}: SDR {val_sdr:.3f} dB")
+                tqdm.write(f"Validation at step {global_step}: SDR {val_sdr:.3f} dB")
                 os.makedirs("checkpoints", exist_ok=True)
                 if cfg["log"].get("save_last", True):
                     torch.save(model.state_dict(), os.path.join("checkpoints", "last.pt"))
@@ -211,6 +233,12 @@ def main():
                     best_sdr = val_sdr
                     torch.save(model.state_dict(), os.path.join("checkpoints", "best.pt"))
             global_step += 1
+            running_loss += loss.item()
+
+        # end epoch: close step bar and update epoch bar postfix
+        step_bar.close()
+        avg_loss = running_loss / max(1, (i + 1))
+        epoch_bar.set_postfix({"avg_loss": f"{avg_loss:.4f}", "best_sdr": f"{best_sdr:.3f}" if best_sdr != float('-inf') else "-inf"})
 
     os.makedirs("checkpoints", exist_ok=True)
     torch.save(model.state_dict(), os.path.join("checkpoints", "last.pt"))

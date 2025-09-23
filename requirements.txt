@@ -16,3 +16,4 @@ numpy
 pyyaml
 gdown
 py7zr
+tqdm
