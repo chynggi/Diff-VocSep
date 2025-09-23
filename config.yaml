@@ -7,7 +7,7 @@ data:
   musdbhq_root: ./data/musdb18hq
   segment_seconds: 4.0
   mono: true
-  dataset: musdb  # musdb | musdbhq
+  dataset: musdbhq  # musdb | musdbhq
 
 # 오디오 / STFT
 audio:
@@ -30,6 +30,7 @@ train:
   log_interval: 50
   val_every_steps: 1000
   val_batches: 10
+  loss_voc_weight: 0.5
 
 # 확산
 diffusion:
@@ -38,6 +39,7 @@ diffusion:
   beta_end: 2.0e-2
   use_ddim: true
   ddim_steps: 50
+  eta: 0.0
 
 # 모델
 model:

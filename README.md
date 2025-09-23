@@ -30,6 +30,11 @@ python -c "import musdb; musdb.DB(root='data/musdb18', download=True)"
 python train.py --config config.yaml
 ```
 
+Key training options in `config.yaml`:
+- train.loss_voc_weight: weight for auxiliary vocal loss (mixture − x0_pred vs GT vocals)
+- diffusion.timesteps: total DDPM steps used in training
+- diffusion.use_ddim + diffusion.ddim_steps + diffusion.eta: enable DDIM during validation/inference for faster sampling (eta=0.0 is deterministic)
+
 Use MUSDB18-HQ (local folders with mixture.wav and stems):
 
 1) Folder layout per track
@@ -58,6 +63,8 @@ data:
 python train.py --config config.yaml
 ```
 
+Auto-download: If `dataset: musdbhq` and the folder is empty/missing, code will attempt to download a ZIP from Google Drive via gdown (id: 1ieGcVPPfgWg__BTDlIGi1TpntdOWwwdn) into `musdbhq_root` and extract it. You can pre-install gdown or it will raise an error asking to install it.
+
 Training logs (TensorBoard):
 
 ```pwsh
@@ -71,10 +78,18 @@ python inference.py --config config.yaml --model_path checkpoints/last.pt --inpu
 ```
 
 Notes
+- Set `diffusion.use_ddim: true` and tune `diffusion.ddim_steps` for a speed/quality trade-off (e.g., 20–100). `eta: 0.0` keeps it deterministic.
+- Model infers instrumental counterfactual and subtracts from mixture in normalized spec space; outputs vocals via iSTFT with mixture phase.
+
+Notes
 - Shapes: (B, C, F, T) for spectrograms; model input is concat([x_t, mixture]).
 - Normalization: log1p + min-max per-batch; keep stats for inverse before iSTFT.
-- This scaffold aims for clarity, not SOTA performance. Tune configs, add DDIM, metrics, and logging as needed.
+- This scaffold aims for clarity, not SOTA performance. Tune configs, DDIM steps, metrics, and logging as needed.
 - Validation/Checkpoint: validates every 1000 steps and saves last/best checkpoints (configurable in config.yaml).
+
+### Troubleshooting
+- GroupNorm errors: channel counts are handled adaptively, but if you modify `channels_mult`, ensure at least three scales (e.g., `[1,2,4]`).
+- Missing optional deps (museval, gdown, py7zr) will disable specific features; install them if needed.
 
 ## 원본 논문 출처
 

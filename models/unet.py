@@ -7,9 +7,17 @@ import torch.nn.functional as F
 class ResidualBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, time_emb_dim: int):
         super().__init__()
-        self.norm1 = nn.GroupNorm(32, in_ch)
+
+        def _gn_groups(c: int) -> int:
+            # choose the largest divisor of c that is <=32, fallback to 1
+            for g in [32, 16, 8, 4, 2, 1]:
+                if c % g == 0:
+                    return g
+            return 1
+
+        self.norm1 = nn.GroupNorm(_gn_groups(in_ch), in_ch)
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.norm2 = nn.GroupNorm(32, out_ch)
+        self.norm2 = nn.GroupNorm(_gn_groups(out_ch), out_ch)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
         self.time_proj = nn.Linear(time_emb_dim, out_ch)
         self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()

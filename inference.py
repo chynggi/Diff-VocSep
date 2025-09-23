@@ -44,9 +44,14 @@ def main():
 
     with torch.no_grad():
         mix_bchw = mag_norm.unsqueeze(0).unsqueeze(0).to(device)
-        instrumental_norm = model.generate_instrumental(mix_bchw)
+        instrumental_norm = model.generate_instrumental(
+            mix_bchw,
+            use_ddim=cfg["diffusion"].get("use_ddim", False),
+            ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
+            eta=cfg["diffusion"].get("eta", 0.0),
+        )
         # vocals = mix - instrumental in normalized space
-        vocals_norm = mix_bchw - instrumental_norm
+        vocals_norm = torch.clamp(mix_bchw - instrumental_norm, -1.0, 1.0)
         vocals_mag = proc.denormalize_mag(vocals_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
         vocals_wav = proc.istft(vocals_mag, phase)
 

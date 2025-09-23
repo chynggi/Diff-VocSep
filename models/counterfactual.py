@@ -15,10 +15,23 @@ class CounterfactualDiffusion(nn.Module):
         return self.unet(x_noisy_and_cond, t)
 
     @torch.no_grad()
-    def generate_instrumental(self, mixture_spec: torch.Tensor) -> torch.Tensor:
+    def generate_instrumental(
+        self,
+        mixture_spec: torch.Tensor,
+        use_ddim: bool = False,
+        ddim_steps: int = 50,
+        eta: float = 0.0,
+    ) -> torch.Tensor:
         # mixture_spec: (B, 1, F, T) normalized magnitude
         b = mixture_spec.size(0)
         x_shape = (b, 1, mixture_spec.size(2), mixture_spec.size(3))
         # diffusion.sample will concat [x, cond] internally in our usage below
-        instrumental = self.diffusion.sample(self, x_shape, cond=mixture_spec)
+        instrumental = self.diffusion.sample(
+            self,
+            x_shape,
+            cond=mixture_spec,
+            use_ddim=use_ddim,
+            ddim_steps=ddim_steps,
+            eta=eta,
+        )
         return instrumental

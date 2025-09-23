@@ -7,6 +7,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.data_loader import create_loader, create_musdbhq_loader
+from utils.data_setup import ensure_musdbhq
 from utils.audio_utils import AudioProcessor
 from models.counterfactual import CounterfactualDiffusion
 
@@ -27,6 +28,8 @@ def main():
     # Dataloaders (musdb or musdbhq)
     dataset_kind = cfg["data"].get("dataset", "musdb").lower()
     if dataset_kind == "musdbhq":
+        # Ensure dataset exists, download if missing
+        ensure_musdbhq(cfg["data"]["musdbhq_root"])
         train_loader = create_musdbhq_loader(
             root_dir=cfg["data"]["musdbhq_root"],
             batch_size=cfg["train"]["batch_size"],
@@ -88,6 +91,7 @@ def main():
     ).to(device)
 
     opt = optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, cfg["train"]["epochs"]) * max(1, len(train_loader)))
     scaler = GradScaler(enabled=cfg["train"]["amp"])
 
     # Logging
@@ -109,8 +113,13 @@ def main():
                 mix = batch["mixture"].to(device)   # (1,1,F,T)
                 acc = batch["accompaniment"].to(device)
                 # 샘플링으로 악기 스펙 추정 -> 보컬 = 혼합 - 악기
-                instrumental_norm = model.generate_instrumental(mix)
-                vocals_est_norm = mix - instrumental_norm
+                instrumental_norm = model.generate_instrumental(
+                    mix,
+                    use_ddim=cfg["diffusion"].get("use_ddim", False),
+                    ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
+                    eta=cfg["diffusion"].get("eta", 0.0),
+                )
+                vocals_est_norm = torch.clamp(mix - instrumental_norm, -1.0, 1.0)
 
                 stats = batch.get("mix_norm_stats")
                 if stats is not None:
@@ -156,7 +165,23 @@ def main():
                 x_t = model.diffusion.q_sample(x_start, t, noise=noise)
                 x_in = torch.cat([x_t, mix], dim=1)
                 pred_noise = model(x_in, t)
-                loss = torch.nn.functional.l1_loss(pred_noise, noise)
+                loss_cf = torch.nn.functional.l1_loss(pred_noise, noise)
+
+                # Add secondary vocal separation objective in spec domain (optional)
+                # Estimate instruments via one reverse step preview (cheap): use current x_t prediction to approximate x0
+                alpha_bar_t = model.diffusion.alphas_cumprod[t].view(-1, 1, 1, 1)
+                sqrt_ab = torch.sqrt(alpha_bar_t)
+                sqrt_one_minus_ab = torch.sqrt(1.0 - alpha_bar_t)
+                x0_pred = (x_t - sqrt_one_minus_ab * pred_noise) / (sqrt_ab + 1e-8)
+                vocals_est = torch.clamp(mix - x0_pred, -1.0, 1.0)
+                # supervise with provided vocals spec if present
+                if "vocals" in batch:
+                    voc = batch["vocals"].to(device)
+                    loss_voc = torch.nn.functional.l1_loss(vocals_est, voc)
+                    w = float(cfg["train"].get("loss_voc_weight", 0.5))
+                    loss = loss_cf + w * loss_voc
+                else:
+                    loss = loss_cf
 
             opt.zero_grad()
             scaler.scale(loss).backward()
@@ -165,6 +190,8 @@ def main():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["grad_clip"])
             scaler.step(opt)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
 
             if writer and (global_step % cfg["train"]["log_interval"] == 0):
                 writer.add_scalar("train/loss", loss.item(), global_step)

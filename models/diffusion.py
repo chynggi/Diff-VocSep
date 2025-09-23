@@ -49,10 +49,91 @@ class GaussianDiffusion(nn.Module):
         noise = torch.randn_like(x)
         return mean + torch.sqrt(var) * noise
 
+    def _get_alpha_bar(self, t: torch.Tensor) -> torch.Tensor:
+        return self.alphas_cumprod[t].view(-1, 1, 1, 1)
+
     @torch.no_grad()
-    def sample(self, model: nn.Module, shape, cond: torch.Tensor = None) -> torch.Tensor:
+    def sample_ddim(
+        self,
+        model: nn.Module,
+        shape,
+        cond: torch.Tensor,
+        steps: int = 50,
+        eta: float = 0.0,
+    ) -> torch.Tensor:
+        """DDIM sampling with optional stochasticity via eta.
+
+        Args:
+            model: noise-prediction model taking (x_in, t)
+            shape: output tensor shape (B, C, F, T)
+            cond: conditioning spectrogram (B, 1, F, T)
+            steps: number of DDIM steps (<= self.timesteps)
+            eta: 0.0 for deterministic DDIM, >0 to add noise
+        """
+        device = cond.device
+        x = torch.randn(shape, device=device)
+
+        # Create an evenly spaced timestep schedule
+        if steps >= self.timesteps:
+            schedule = list(range(self.timesteps))
+        else:
+            # include last index (T-1)
+            schedule = torch.linspace(0, self.timesteps - 1, steps, device=device).long().tolist()
+        # iterate backwards
+        for i in reversed(range(len(schedule))):
+            t_i = schedule[i]
+            t = torch.full((shape[0],), t_i, device=device, dtype=torch.long)
+            x_in = torch.cat([x, cond], dim=1)
+            eps = model(x_in, t)
+
+            alpha_bar_t = self._get_alpha_bar(t)
+            sqrt_ab_t = torch.sqrt(alpha_bar_t)
+            sqrt_one_minus_ab_t = torch.sqrt(1.0 - alpha_bar_t)
+            # predict x0 from current x and eps
+            x0_pred = (x - sqrt_one_minus_ab_t * eps) / (sqrt_ab_t + 1e-8)
+
+            if i == 0:
+                # final step maps to t=-1 => alpha_bar_prev=1
+                alpha_bar_prev = torch.ones_like(alpha_bar_t)
+            else:
+                t_prev_scalar = schedule[i - 1]
+                t_prev = torch.full((shape[0],), t_prev_scalar, device=device, dtype=torch.long)
+                alpha_bar_prev = self._get_alpha_bar(t_prev)
+
+            # DDIM sigma
+            sigma_t = 0.0
+            if eta > 0.0:
+                sigma_t = eta * torch.sqrt(
+                    (1 - alpha_bar_prev) / (1 - alpha_bar_t + 1e-8)
+                    * (1 - alpha_bar_t / (alpha_bar_prev + 1e-8))
+                )
+            # direction pointing to x_t
+            dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - (sigma_t ** 2), min=0.0)) * eps
+            noise = torch.randn_like(x) if eta > 0.0 and i > 0 else 0.0
+            x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + (sigma_t * noise if isinstance(noise, torch.Tensor) else 0.0)
+
+        return x
+
+    @torch.no_grad()
+    def sample(
+        self,
+        model: nn.Module,
+        shape,
+        cond: torch.Tensor = None,
+        use_ddim: bool = False,
+        ddim_steps: int = 50,
+        eta: float = 0.0,
+    ) -> torch.Tensor:
         # model should accept concat([x, cond]) as input channels when cond is provided
-        x = torch.randn(shape, device=cond.device if cond is not None else None)
+        if cond is None:
+            device = None
+        else:
+            device = cond.device
+
+        if use_ddim and cond is not None:
+            return self.sample_ddim(model, shape, cond=cond, steps=ddim_steps, eta=eta)
+
+        x = torch.randn(shape, device=device)
         for i in reversed(range(self.timesteps)):
             t = torch.full((shape[0],), i, device=x.device, dtype=torch.long)
             x_in = torch.cat([x, cond], dim=1) if cond is not None else x

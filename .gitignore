@@ -26,3 +26,6 @@ wandb/
 # OS
 .DS_Store
 Thumbs.db
+
+# pdf
+*.pdf
