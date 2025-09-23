@@ -79,9 +79,9 @@ def _build_dataloaders(cfg, device):
     if xm is None:
         raise RuntimeError("torch-xla is required for TPU training. Please install torch-xla and run on a TPU runtime.")
 
-    world_size = xm.xrt_world_size()
-    rank = xm.get_ordinal()
-
+    world_size = xm.runtime.world_size()
+    rank = xm.runtime.global_ordinal()
+    
     train_sampler = DistributedSampler(
         train_set, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True
     )
@@ -287,7 +287,7 @@ def main():
     args = parse_args()
     if xmp is None:
         raise RuntimeError("torch-xla not found. Install torch-xla and run on a TPU-enabled environment.")
-    xmp.spawn(_mp_fn, args=(args,), nprocs=None, start_method='spawn')
+    xmp.spawn(_mp_fn, args=(args,), nprocs=1, start_method='spawn')
 
 
 if __name__ == "__main__":
