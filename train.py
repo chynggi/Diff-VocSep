@@ -127,8 +127,26 @@ def main():
 
                 stats = batch.get("mix_norm_stats")
                 if stats is not None:
-                    s_min = float(stats[0].item())
-                    s_max = float(stats[1].item())
+                    # stats can be shaped (B, 2) due to DataLoader batching or (2,) per sample
+                    try:
+                        if isinstance(stats, torch.Tensor):
+                            if stats.ndim == 2 and stats.size(-1) == 2:
+                                s_min = float(stats[0, 0].item())
+                                s_max = float(stats[0, 1].item())
+                            elif stats.ndim == 1 and stats.numel() == 2:
+                                s_min = float(stats[0].item())
+                                s_max = float(stats[1].item())
+                            else:
+                                # Fallback: use global min/max
+                                s_min = float(stats.min().item())
+                                s_max = float(stats.max().item())
+                        elif isinstance(stats, (list, tuple)) and len(stats) >= 2:
+                            s_min = float(stats[0])
+                            s_max = float(stats[1])
+                        else:
+                            s_min, s_max = -1.0, 1.0
+                    except Exception:
+                        s_min, s_max = -1.0, 1.0
                 else:
                     s_min, s_max = -1.0, 1.0
 
