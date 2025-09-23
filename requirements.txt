@@ -1,0 +1,16 @@
+torch
+torchvision
+torchaudio
+librosa
+soundfile
+scipy
+musdb
+museval
+stempeg
+matplotlib
+tensorboard
+wandb
+asteroid-filterbanks
+pedalboard
+numpy
+pyyaml

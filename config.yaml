@@ -1,0 +1,57 @@
+# 기본 설정 값 (필요 시 수정)
+seed: 42
+
+# 데이터
+data:
+  musdb_root: ./data/musdb18
+  segment_seconds: 4.0
+  mono: true
+
+# 오디오 / STFT
+audio:
+  # MSST 스타일 기본값 (필요 시 조정)
+  sample_rate: 44100
+  n_fft: 8192
+  hop_length: 1024
+  win_length: 8192
+  window: hann
+  center: true
+
+# 학습
+train:
+  batch_size: 4
+  epochs: 5
+  lr: 2.0e-4
+  weight_decay: 1.0e-2
+  grad_clip: 1.0
+  amp: false
+  log_interval: 50
+  val_every_steps: 1000
+  val_batches: 10
+
+# 확산
+diffusion:
+  timesteps: 200
+  beta_start: 1.0e-4
+  beta_end: 2.0e-2
+  use_ddim: true
+  ddim_steps: 50
+
+# 모델
+model:
+  in_channels: 2   # [noisy, mixture]
+  out_channels: 1  # instruments magnitude
+  base_channels: 64
+  channels_mult: [1, 2, 4]
+  attn_resolutions: [4, 8]
+
+# 로깅/체크포인트
+log:
+  out_dir: ./logs
+  use_wandb: false
+  use_tensorboard: true
+  tb_log_dir: ./logs/tb
+  project: diff-msst
+  entity: null
+  save_best: true
+  save_last: true
