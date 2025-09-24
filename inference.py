@@ -17,6 +17,10 @@ def parse_args():
     p.add_argument("--segment-seconds", type=float, default=0.0, help="Segment length in seconds for chunked inference (0 for full).")
     p.add_argument("--overlap-seconds", type=float, default=0.0, help="Overlap in seconds between segments.")
     p.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars during inference.")
+    # Shallow diffusion options
+    p.add_argument("--init-instrumental", type=str, default=None, help="Optional path to an initial instrumental WAV to use as shallow diffusion prior (same length as input).")
+    p.add_argument("--shallow-k", type=int, default=None, help="If provided, run shallow diffusion starting from timestep k.")
+    p.add_argument("--no-forward-noise", action="store_true", help="With shallow init, treat provided prior as already at x_k (skip forward noising).")
     return p.parse_args()
 
 
@@ -35,6 +39,8 @@ def main():
         timesteps=cfg["diffusion"]["timesteps"],
         beta_start=cfg["diffusion"]["beta_start"],
         beta_end=cfg["diffusion"]["beta_end"],
+        model_type=cfg["model"].get("model_type", "unet"),
+        model_kwargs=cfg["model"].get("model_kwargs", {}),
     ).to(device)
 
     sd = torch.load(args.model_path, map_location=device)
@@ -53,7 +59,41 @@ def main():
             ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
             eta=cfg["diffusion"].get("eta", 0.0),
             progress=not args.no_progress,
+            sampler=cfg["diffusion"].get("sampler", None),
         )
+        # Prepare shallow diffusion init if provided
+        shallow_init = None
+        if args.init_instrumental is not None:
+            init_wav, _ = proc.load_audio(args.init_instrumental, target_sr=cfg["audio"]["sample_rate"])
+            # Match length to input
+            if init_wav.numel() != wav.numel():
+                L = wav.shape[-1]
+                if init_wav.shape[-1] < L:
+                    pad = L - init_wav.shape[-1]
+                    init_wav = torch.nn.functional.pad(init_wav, (0, pad))
+                else:
+                    init_wav = init_wav[..., :L]
+            init_mag, _ = proc.stft(init_wav)
+            # Normalize using mixture stats so subtraction remains consistent
+            init_mag_norm = proc.normalize_mag_with_stats(init_mag, s_min, s_max)
+            shallow_init = init_mag_norm.unsqueeze(0).unsqueeze(0).to(device)
+            gen_kwargs.update(
+                dict(
+                    shallow_init=shallow_init,
+                    k_step=args.shallow_k if args.shallow_k is not None else cfg["diffusion"].get("shallow_k", None),
+                    add_forward_noise=not args.no_forward_noise,
+                )
+            )
+        elif args.shallow_k is not None or cfg["diffusion"].get("shallow_k", None) is not None:
+            # Shallow with no explicit init: use mixture as a weak prior (common in shallow diffusion usage)
+            shallow_init = mix_bchw
+            gen_kwargs.update(
+                dict(
+                    shallow_init=shallow_init,
+                    k_step=args.shallow_k if args.shallow_k is not None else cfg["diffusion"].get("shallow_k", None),
+                    add_forward_noise=True,
+                )
+            )
         seg_secs = float(args.segment_seconds)
         if seg_secs and seg_secs > 0:
             # Convert seconds to STFT frames: frames ~= ceil((N - win)/hop) + 1, approximate via T from mag

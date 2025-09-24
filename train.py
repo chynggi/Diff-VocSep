@@ -33,6 +33,7 @@ def main():
     if dataset_kind == "musdbhq":
         # Ensure dataset exists, download if missing
         ensure_musdbhq(cfg["data"]["musdbhq_root"])
+        pitch_aug_cfg = cfg["data"].get("pitch_aug", None)
         train_loader = create_musdbhq_loader(
             root_dir=cfg["data"]["musdbhq_root"],
             batch_size=cfg["train"]["batch_size"],
@@ -43,6 +44,7 @@ def main():
             win_length=cfg["audio"]["win_length"],
             center=cfg["audio"].get("center", True),
             num_workers=0,
+            pitch_aug=pitch_aug_cfg,
         )
         # val 로더는 간단히 동일 구조에서 batch_size=1로 생성
         val_loader = create_musdbhq_loader(
@@ -55,8 +57,10 @@ def main():
             win_length=cfg["audio"]["win_length"],
             center=cfg["audio"].get("center", True),
             num_workers=0,
+            pitch_aug=None,
         )
     else:
+        pitch_aug_cfg = cfg["data"].get("pitch_aug", None)
         train_loader = create_loader(
             root_dir=cfg["data"]["musdb_root"],
             subset="train",
@@ -68,6 +72,7 @@ def main():
             win_length=cfg["audio"]["win_length"],
             center=cfg["audio"].get("center", True),
             num_workers=0,
+            pitch_aug=pitch_aug_cfg,
         )
         val_loader = create_loader(
             root_dir=cfg["data"]["musdb_root"],
@@ -80,6 +85,7 @@ def main():
             win_length=cfg["audio"]["win_length"],
             center=cfg["audio"].get("center", True),
             num_workers=0,
+            pitch_aug=None,
         )
 
     # Model
@@ -91,6 +97,8 @@ def main():
         timesteps=cfg["diffusion"]["timesteps"],
         beta_start=cfg["diffusion"]["beta_start"],
         beta_end=cfg["diffusion"]["beta_end"],
+        model_type=cfg["model"].get("model_type", "unet"),
+        model_kwargs=cfg["model"].get("model_kwargs", {}),
     ).to(device)
 
     opt = optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])

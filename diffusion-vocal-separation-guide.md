@@ -40,13 +40,11 @@ diffusion_vocal_separation/
 ├── utils/
 │   ├── audio_utils.py   # 오디오 처리 유틸리티
 │   ├── data_loader.py   # 데이터 로더
-│   └── metrics.py       # 평가 메트릭
 ├── train.py            # 훈련 스크립트
 ├── inference.py        # 추론 스크립트
 └── config.yaml        # 설정 파일
 ```
 
-## 2. 이론적 배경
 
 ### 2.1 디퓨전 모델
 디퓨전 모델은 두 가지 과정으로 구성됩니다:
@@ -58,7 +56,6 @@ diffusion_vocal_separation/
 2. **역방향 과정 (Reverse Process)**
    - 노이즈에서 깨끗한 오디오 복원
    - p_θ(x_{t-1} | x_t) = N(x_{t-1}; μ_θ(x_t, t), Σ_θ(x_t, t))
-
 ### 2.2 반사실적 생성
 반사실적 생성은 다음과 같은 과정을 통해 이루어집니다:
 

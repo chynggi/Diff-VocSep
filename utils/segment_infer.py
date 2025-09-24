@@ -83,6 +83,12 @@ def spectrogram_segment_infer(
         # Disable inner diffusion bar to avoid nested bars; we show per-segment bar here
         kwargs = dict(generate_kwargs)
         kwargs["progress"] = False
+        # If shallow_init provided, slice the same region and pad
+        if "shallow_init" in kwargs and kwargs["shallow_init"] is not None:
+            si = kwargs["shallow_init"][..., t:end]
+            if cur_len < seg:
+                si = torch.nn.functional.pad(si, (0, seg - cur_len))
+            kwargs["shallow_init"] = si.to(device)
         pred = model.generate_instrumental(seg_tensor, **kwargs)
         pred = pred[..., :cur_len]  # crop padding
         out[..., t:end] += pred.to(out.dtype).to(out.device)

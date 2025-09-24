@@ -73,6 +73,19 @@ class AudioProcessor:
         norm = norm * 2.0 - 1.0
         return norm, s_min, s_max
 
+    def normalize_mag_with_stats(self, mag: torch.Tensor, s_min: float, s_max: float) -> torch.Tensor:
+        """Normalize magnitude using externally provided stats (e.g., from mixture).
+
+        Args:
+            mag: (F, T) magnitude
+            s_min, s_max: stats computed from reference spectrogram after log1p (floats)
+        Returns:
+            mag_norm: (F, T) normalized with provided stats (still in [0,1] before mapping if needed)
+        """
+        m = torch.log1p(torch.clamp(mag, min=0.0))
+        norm01 = (m - s_min) / (s_max - s_min + 1e-8)
+        return norm01 * 2.0 - 1.0
+
     @staticmethod
     def denormalize_mag(norm: torch.Tensor, s_min: float, s_max: float) -> torch.Tensor:
         log_spec = (norm + 1.0) * 0.5 * (s_max - s_min) + s_min

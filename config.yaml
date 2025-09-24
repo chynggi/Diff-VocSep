@@ -8,6 +8,10 @@ data:
   segment_seconds: 2.0
   mono: true
   dataset: musdbhq  # musdb | musdbhq
+  pitch_aug:
+    enabled: false
+    semitones: [-2.0, 2.0]
+    prob: 0.3
 
 # 오디오 / STFT
 audio:
@@ -21,7 +25,7 @@ audio:
 
 # 학습
 train:
-  batch_size: 2
+  batch_size: 1
   epochs: 1000
   lr: 2.0e-4
   weight_decay: 1.0e-2
@@ -37,9 +41,12 @@ diffusion:
   timesteps: 200
   beta_start: 1.0e-4
   beta_end: 2.0e-2
+  beta_schedule: linear  # linear | cosine
   use_ddim: true
   ddim_steps: 50
   eta: 0.0
+  # sampler: ddpm | ddim | (future: dpm-solver, unipc)
+  sampler: ddim
 
 # 모델
 model:
@@ -48,6 +55,15 @@ model:
   base_channels: 64
   channels_mult: [1, 2, 4]
   attn_resolutions: [4, 8]
+  model_type: conformer  # unet | conformer
+  model_kwargs:
+    d_model: 128
+    n_heads: 4
+    d_ff: 256
+    num_layers: 6
+    kernel_size: 31
+    dropout: 0.0
+    axis: time  # time | freq | mixed
 
 # 로깅/체크포인트
 log:

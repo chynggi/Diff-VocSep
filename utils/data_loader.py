@@ -1,5 +1,5 @@
 import random
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from pathlib import Path
 
 import torch
@@ -8,6 +8,11 @@ import musdb
 import torchaudio
 
 from .audio_utils import AudioProcessor, to_mono
+try:
+    from pedalboard import Pedalboard, PitchShift
+    _HAS_PEDALBOARD = True
+except Exception:
+    _HAS_PEDALBOARD = False
 
 
 def _exists(x) -> bool:
@@ -18,6 +23,11 @@ class MUSDB18Dataset(Dataset):
         self.db = musdb.DB(root=root_dir, subsets=subset)
         self.segment_length = segment_length
         self.processor = AudioProcessor(sr=sr, n_fft=n_fft, hop_length=hop_length, win_length=win_length, center=center)
+        # Optional pitch augmentation config
+        self.pitch_aug = {"enabled": False, "semitones": (-2.0, 2.0), "prob": 0.0}
+
+    def set_pitch_aug(self, enabled: bool, semitone_range: Tuple[float, float], prob: float = 0.5):
+        self.pitch_aug = {"enabled": enabled, "semitones": (float(semitone_range[0]), float(semitone_range[1])), "prob": float(prob)}
 
     def __len__(self):
         # Heuristic: 10 segments per track
@@ -39,6 +49,20 @@ class MUSDB18Dataset(Dataset):
         vocals = to_mono(vocals)
         accompaniment = to_mono(accompaniment)
 
+        # Apply optional pitch augmentation consistently across sources
+        if self.pitch_aug.get("enabled", False) and _HAS_PEDALBOARD and random.random() < float(self.pitch_aug.get("prob", 0.0)):
+            lo, hi = self.pitch_aug.get("semitones", (-2.0, 2.0))
+            shift = random.uniform(float(lo), float(hi))
+            board = Pedalboard([PitchShift(semitones=shift)])
+            sr = self.processor.sr
+            def _do(w: torch.Tensor) -> torch.Tensor:
+                x = w.detach().cpu().numpy().astype("float32")[None, :]
+                y = board(x, sample_rate=sr)[0]
+                return torch.from_numpy(y)
+            mixture = _do(mixture)
+            vocals = _do(vocals)
+            accompaniment = _do(accompaniment)
+
         mix_mag, mix_phase = self.processor.stft(mixture)
         voc_mag, _ = self.processor.stft(vocals)
         acc_mag, _ = self.processor.stft(accompaniment)
@@ -56,8 +80,12 @@ class MUSDB18Dataset(Dataset):
         }
 
 
-def create_loader(root_dir: str, subset: str, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0) -> DataLoader:
+def create_loader(root_dir: str, subset: str, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0, pitch_aug: Optional[Dict] = None) -> DataLoader:
     dataset = MUSDB18Dataset(root_dir, subset=subset, segment_length=segment_seconds, sr=sr, n_fft=n_fft, hop_length=hop, win_length=win_length, center=center)
+    if pitch_aug and pitch_aug.get("enabled", False):
+        lo, hi = pitch_aug.get("semitones", (-2.0, 2.0))
+        prob = pitch_aug.get("prob", 0.5)
+        dataset.set_pitch_aug(True, (float(lo), float(hi)), float(prob))
     return DataLoader(dataset, batch_size=batch_size, shuffle=(subset == "train"), num_workers=num_workers)
 
 
@@ -97,6 +125,10 @@ class MusDB18HQ(Dataset):
         self.segment_seconds = segment_seconds
         self.sr = sr
         self.processor = AudioProcessor(sr=sr, n_fft=n_fft, hop_length=hop_length, win_length=win_length, center=center)
+        self.pitch_aug = {"enabled": False, "semitones": (-2.0, 2.0), "prob": 0.0}
+
+    def set_pitch_aug(self, enabled: bool, semitone_range: Tuple[float, float], prob: float = 0.5):
+        self.pitch_aug = {"enabled": enabled, "semitones": (float(semitone_range[0]), float(semitone_range[1])), "prob": float(prob)}
 
     def __len__(self):
         return len(self.paths)
@@ -140,6 +172,20 @@ class MusDB18HQ(Dataset):
                 accompaniment = torch.nn.functional.pad(accompaniment, (0, pad))
                 vocals = torch.nn.functional.pad(vocals, (0, pad))
 
+        # Optional pitch augmentation (apply consistently to all stems)
+        if self.pitch_aug.get("enabled", False) and _HAS_PEDALBOARD and random.random() < float(self.pitch_aug.get("prob", 0.0)):
+            lo, hi = self.pitch_aug.get("semitones", (-2.0, 2.0))
+            shift = random.uniform(float(lo), float(hi))
+            board = Pedalboard([PitchShift(semitones=shift)])
+            sr = self.processor.sr
+            def _do(w: torch.Tensor) -> torch.Tensor:
+                x = w.detach().cpu().numpy().astype("float32")[None, :]
+                y = board(x, sample_rate=sr)[0]
+                return torch.from_numpy(y)
+            mixture = _do(mixture)
+            accompaniment = _do(accompaniment)
+            vocals = _do(vocals)
+
         # STFT and normalization
         mix_mag, mix_phase = self.processor.stft(mixture)
         voc_mag, _ = self.processor.stft(vocals)
@@ -158,7 +204,7 @@ class MusDB18HQ(Dataset):
         }
 
 
-def create_musdbhq_loader(root_dir: str | Path, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0) -> DataLoader:
+def create_musdbhq_loader(root_dir: str | Path, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0, pitch_aug: Optional[Dict] = None) -> DataLoader:
     dataset = MusDB18HQ(
         dataset_path=root_dir,
         segment_seconds=segment_seconds,
@@ -168,4 +214,8 @@ def create_musdbhq_loader(root_dir: str | Path, batch_size: int, segment_seconds
         win_length=win_length,
         center=center,
     )
+    if pitch_aug and pitch_aug.get("enabled", False):
+        lo, hi = pitch_aug.get("semitones", (-2.0, 2.0))
+        prob = pitch_aug.get("prob", 0.5)
+        dataset.set_pitch_aug(True, (float(lo), float(hi)), float(prob))
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
