@@ -35,8 +35,55 @@ def ensure_musdbhq(root: str | Path, gdrive_id: str = "1ieGcVPPfgWg__BTDlIGi1Tpn
     # Extract using py7zr
     print(f"Extracting {archive_path} ...")
     import py7zr
+    # Try to show per-file progress using tqdm; gracefully degrade if unavailable.
+    try:
+        from tqdm import tqdm
+    except Exception:
+        tqdm = None  # type: ignore
+
     with py7zr.SevenZipFile(str(archive_path), mode='r') as z:
-        z.extractall(path=str(root))
+        # Collect file names in archive (exclude directories)
+        try:
+            names = z.getnames()
+        except Exception:
+            # Fallback to using list() entries if getnames is unavailable
+            try:
+                names = [getattr(info, "filename", getattr(info, "name", "")) for info in z.list()]
+            except Exception:
+                names = []
+
+        file_names = [n for n in names if n and not n.endswith("/") and not n.endswith("\\")]  # exclude dirs
+
+        if tqdm and file_names:
+            bar = tqdm(total=len(file_names), desc="Extracting MUSDB18-HQ", unit="file")
+        else:
+            bar = None
+
+        def _update_bar():
+            if bar is not None:
+                bar.update(1)
+
+        try:
+            # Extract per-file to enable progress; skip files that already exist
+            for name in file_names or []:
+                dest = root / name
+                if dest.exists():
+                    _update_bar()
+                    continue
+                # Some py7zr versions use (path, targets), others support (targets, path)
+                try:
+                    z.extract(path=str(root), targets=[name])  # type: ignore[arg-type]
+                except TypeError:
+                    z.extract(targets=[name], path=str(root))  # type: ignore[arg-type]
+                _update_bar()
+        finally:
+            if bar is not None:
+                bar.close()
+
+        # If we couldn't enumerate names (rare), fall back to single-shot extract
+        if not file_names:
+            z.extractall(path=str(root))
+
     print("Extraction completed.")
 
     return root
