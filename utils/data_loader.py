@@ -1,6 +1,7 @@
 import random
 from typing import Dict, Optional, Tuple
 from pathlib import Path
+import warnings
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -114,16 +115,44 @@ class MusDB18HQ(Dataset):
         if isinstance(dataset_path, str):
             dataset_path = Path(dataset_path)
 
-        # If subset provided, narrow the search to that subfolder (e.g., 'Train' or 'Test')
-        base = dataset_path / subset if isinstance(subset, str) and len(subset) > 0 else dataset_path
+        # Resolve base search directories with robust, case-insensitive subset handling
+        bases: list[Path] = []
+        if isinstance(subset, str) and subset:
+            # Try exact, lower, upper, title variants
+            candidates = {
+                dataset_path / subset,
+                dataset_path / subset.lower(),
+                dataset_path / subset.upper(),
+                dataset_path / subset.title(),
+            }
+            # Also try to match any immediate child directory case-insensitively
+            try:
+                for child in dataset_path.iterdir():
+                    if child.is_dir() and child.name.lower() == subset.lower():
+                        candidates.add(child)
+            except FileNotFoundError:
+                pass
+            bases = [p for p in candidates if p.exists()]
+            if not bases:
+                warnings.warn(
+                    f"Subset folder '{subset}' not found under '{dataset_path}'. Falling back to scanning the whole root.")
+        if not bases:
+            bases = [dataset_path]
 
-        paths = []
-        mixture_paths = base.glob("**/*/mixture.wav")
-        for mixture_path in mixture_paths:
-            parent = mixture_path.parent
-            if not all((parent / f"{name}.wav").exists() for name in sep_filenames):
-                continue
-            paths.append(parent)
+        # Scan for track folders containing mixture.wav and all required stems
+        paths: list[Path] = []
+        for base in bases:
+            mixture_paths = base.glob("**/*/mixture.wav")
+            for mixture_path in mixture_paths:
+                parent = mixture_path.parent
+                if not all((parent / f"{name}.wav").exists() for name in sep_filenames):
+                    continue
+                paths.append(parent)
+
+        if not paths:
+            warnings.warn(
+                "No MUSDB18-HQ tracks found. Expected folders containing mixture.wav and stems "
+                f"{sep_filenames} under '{dataset_path}' (subset={subset}).")
 
         self.paths = sorted(paths)
         self.sep_filenames = sep_filenames
@@ -226,4 +255,13 @@ def create_musdbhq_loader(root_dir: str | Path, subset: str, batch_size: int, se
         lo, hi = pitch_aug.get("semitones", (-2.0, 2.0))
         prob = pitch_aug.get("prob", 0.5)
         dataset.set_pitch_aug(True, (float(lo), float(hi)), float(prob))
+    # Fail fast if dataset is empty to avoid cryptic DataLoader errors
+    if len(dataset) == 0:
+        raise ValueError(
+            "No samples found for MUSDB18-HQ dataset. "
+            f"root_dir='{root_dir}', subset='{subset}'.\n"
+            "Please verify the dataset path and layout. Expected: \n"
+            "<root>/Train/<Track>/mixture.wav and drums.wav, bass.wav, vocals.wav, other.wav (or 'Test' similarly).\n"
+            "If your subset folders are differently cased (e.g., 'train'/'test'), they are supported automatically."
+        )
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
