@@ -113,6 +113,8 @@ def _mp_fn(index, args):
         timesteps=cfg["diffusion"]["timesteps"],
         beta_start=cfg["diffusion"]["beta_start"],
         beta_end=cfg["diffusion"]["beta_end"],
+        model_type=cfg["model"].get("model_type", "unet"),
+        model_kwargs=cfg["model"].get("model_kwargs", {}),
     ).to(device)
 
     # Use best/last checkpoint if present

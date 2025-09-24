@@ -38,6 +38,7 @@ def _build_dataloaders(cfg, device):
         ensure_musdbhq(cfg["data"]["musdbhq_root"])  # ensures available
         train_set = MusDB18HQ(
             dataset_path=cfg["data"]["musdbhq_root"],
+            subset="Train",
             segment_seconds=cfg["data"]["segment_seconds"],
             sr=cfg["audio"]["sample_rate"],
             n_fft=cfg["audio"]["n_fft"],
@@ -47,6 +48,7 @@ def _build_dataloaders(cfg, device):
         )
         val_set = MusDB18HQ(
             dataset_path=cfg["data"]["musdbhq_root"],
+            subset="Test",
             segment_seconds=cfg["data"]["segment_seconds"],
             sr=cfg["audio"]["sample_rate"],
             n_fft=cfg["audio"]["n_fft"],
@@ -76,11 +78,20 @@ def _build_dataloaders(cfg, device):
             center=cfg["audio"].get("center", True),
         )
 
+    # Optional pitch augmentation setup for training set
+    pitch_aug_cfg = cfg["data"].get("pitch_aug", None)
+    if pitch_aug_cfg and pitch_aug_cfg.get("enabled", False):
+        lo, hi = pitch_aug_cfg.get("semitones", (-2.0, 2.0))
+        prob = pitch_aug_cfg.get("prob", 0.5)
+        if hasattr(train_set, "set_pitch_aug"):
+            train_set.set_pitch_aug(True, (float(lo), float(hi)), float(prob))
+
     if xm is None:
         raise RuntimeError("torch-xla is required for TPU training. Please install torch-xla and run on a TPU runtime.")
 
-    world_size = xm.runtime.world_size()
-    rank = xm.runtime.global_ordinal()
+    # Use stable XLA APIs
+    world_size = xm.xrt_world_size()
+    rank = xm.get_ordinal()
     
     train_sampler = DistributedSampler(
         train_set, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True
@@ -129,11 +140,24 @@ def _validate(model, val_loader, cfg, device, max_batches=10):
             mix = batch["mixture"].to(device)
             acc = batch["accompaniment"].to(device)
 
+            # Validation-time sampler/shallow settings aligned with GPU path
+            val_sampler = cfg["diffusion"].get("sampler", None)
+            val_use_ddim = cfg["diffusion"].get("use_ddim", False)
+            val_ddim_steps = cfg["diffusion"].get("val_ddim_steps", cfg["diffusion"].get("ddim_steps", 50))
+            val_eta = cfg["diffusion"].get("eta", 0.0)
+            shallow_cfg = cfg["diffusion"].get("validate_use_shallow", False)
+            shallow_k = cfg["diffusion"].get("shallow_k", None)
+            add_forward_noise = cfg["diffusion"].get("add_forward_noise", True)
+
             instrumental_norm = model.generate_instrumental(
                 mix,
-                use_ddim=cfg["diffusion"].get("use_ddim", False),
-                ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
-                eta=cfg["diffusion"].get("eta", 0.0),
+                use_ddim=val_use_ddim,
+                ddim_steps=val_ddim_steps,
+                eta=val_eta,
+                sampler=val_sampler,
+                shallow_init=(mix if shallow_cfg else None),
+                k_step=shallow_k,
+                add_forward_noise=add_forward_noise,
             )
             vocals_est_norm = torch.clamp(mix - instrumental_norm, -1.0, 1.0)
 
@@ -148,13 +172,18 @@ def _validate(model, val_loader, cfg, device, max_batches=10):
             voc_mag = proc.denormalize_mag(vocals_est_norm.squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
             voc_wav = proc.istft(voc_mag, mix_phase).numpy()
 
-            acc_mag = proc.denormalize_mag(acc.squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
-            acc_wav = proc.istft(acc_mag, mix_phase).numpy()
-            mix_mag = proc.denormalize_mag(mix.squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
-            mix_wav = proc.istft(mix_mag, mix_phase).numpy()
-            target_voc = mix_wav - acc_wav
+            # Prefer GT vocals if present; fallback to mix - accompaniment
+            if "vocals" in batch and batch["vocals"] is not None:
+                voc_gt_mag = proc.denormalize_mag(batch["vocals"].squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
+                target_voc = proc.istft(voc_gt_mag, mix_phase).numpy()
+            else:
+                acc_mag = proc.denormalize_mag(acc.squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
+                acc_wav = proc.istft(acc_mag, mix_phase).numpy()
+                mix_mag = proc.denormalize_mag(mix.squeeze(0).squeeze(0).detach().cpu(), s_min, s_max)
+                mix_wav = proc.istft(mix_mag, mix_phase).numpy()
+                target_voc = mix_wav - acc_wav
 
-            m = evaluate_waveforms(voc_wav, target_voc)
+            m = evaluate_waveforms(voc_wav, target_voc, sr=cfg["audio"]["sample_rate"], use_museval=False)
             sdr = m.get("SDR", float("nan"))
             if not math.isnan(sdr):
                 total_sdr += sdr
@@ -181,6 +210,8 @@ def _mp_fn(index, args):
         timesteps=cfg["diffusion"]["timesteps"],
         beta_start=cfg["diffusion"]["beta_start"],
         beta_end=cfg["diffusion"]["beta_end"],
+        model_type=cfg["model"].get("model_type", "unet"),
+        model_kwargs=cfg["model"].get("model_kwargs", {}),
     ).to(device)
 
     opt = optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
@@ -287,7 +318,8 @@ def main():
     args = parse_args()
     if xmp is None:
         raise RuntimeError("torch-xla not found. Install torch-xla and run on a TPU-enabled environment.")
-    xmp.spawn(_mp_fn, args=(args,), nprocs=1, start_method='spawn')
+    # Use all available TPU cores by default
+    xmp.spawn(_mp_fn, args=(args,), nprocs=None, start_method='spawn')
 
 
 if __name__ == "__main__":
