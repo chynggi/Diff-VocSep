@@ -4,7 +4,7 @@ import yaml
 import torch
 from torch import optim
 import numpy as np
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm, trange
 
@@ -103,7 +103,7 @@ def main():
 
     opt = optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, cfg["train"]["epochs"]) * max(1, len(train_loader)))
-    scaler = GradScaler(enabled=cfg["train"]["amp"])
+    scaler = GradScaler(device="cuda" if device.type == "cuda" else "cpu", enabled=cfg["train"]["amp"])
 
     # Logging
     writer = SummaryWriter(log_dir=cfg["log"]["tb_log_dir"]) if cfg["log"].get("use_tensorboard", True) else None
@@ -204,7 +204,7 @@ def main():
             t = torch.randint(0, model.diffusion.timesteps, (b,), device=device, dtype=torch.long)
 
             # forward noising on target instruments
-            with autocast(enabled=cfg["train"]["amp"]):
+            with autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=cfg["train"]["amp"]):
                 x_start = acc
                 noise = torch.randn_like(x_start)
                 x_t = model.diffusion.q_sample(x_start, t, noise=noise)

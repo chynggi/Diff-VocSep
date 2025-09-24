@@ -28,9 +28,21 @@ class AudioProcessor:
         else:
             self.window = torch.hann_window(win_length)
 
-    def load_audio(self, path: str, target_sr: int = None) -> Tuple[torch.Tensor, int]:
+    def load_audio(self, path: str, target_sr: int = None, keep_stereo: bool = False) -> Tuple[torch.Tensor, int]:
+        """Load audio from path.
+
+        Args:
+            path: audio file path
+            target_sr: if provided, resample to this sample rate
+            keep_stereo: if True, do not downmix and keep channel dimension as is
+
+        Returns:
+            waveform: (T,) for mono or (C, T) for multi-channel when keep_stereo=True
+            sr: sample rate
+        """
         wav, sr = torchaudio.load(path)
-        wav = to_mono(wav)
+        if not keep_stereo:
+            wav = to_mono(wav)
         if target_sr and sr != target_sr:
             resampler = torchaudio.transforms.Resample(sr, target_sr)
             wav = resampler(wav)

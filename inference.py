@@ -17,6 +17,7 @@ def parse_args():
     p.add_argument("--segment-seconds", type=float, default=0.0, help="Segment length in seconds for chunked inference (0 for full).")
     p.add_argument("--overlap-seconds", type=float, default=0.0, help="Overlap in seconds between segments.")
     p.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars during inference.")
+    p.add_argument("--stereo-output", action="store_true", help="If set, keep input stereo image and output stereo vocals via TF mask.")
     # Shallow diffusion options
     p.add_argument("--init-instrumental", type=str, default=None, help="Optional path to an initial instrumental WAV to use as shallow diffusion prior (same length as input).")
     p.add_argument("--shallow-k", type=int, default=None, help="If provided, run shallow diffusion starting from timestep k.")
@@ -47,9 +48,16 @@ def main():
     model.load_state_dict(sd, strict=False)
     model.eval()
 
-    proc = AudioProcessor(sr=cfg["audio"]["sample_rate"], n_fft=cfg["audio"]["n_fft"], hop_length=cfg["audio"]["hop_length"], win_length=cfg["audio"]["win_length"], center=cfg["audio"].get("center", True))    
-    wav, sr = proc.load_audio(args.input, target_sr=cfg["audio"]["sample_rate"]) 
-    mag, phase = proc.stft(wav)
+    proc = AudioProcessor(sr=cfg["audio"]["sample_rate"], n_fft=cfg["audio"]["n_fft"], hop_length=cfg["audio"]["hop_length"], win_length=cfg["audio"]["win_length"], center=cfg["audio"].get("center", True))
+    # Keep stereo if requested to preserve spatial image at output
+    keep_stereo = bool(args.stereo_output)
+    wav, sr = proc.load_audio(args.input, target_sr=cfg["audio"]["sample_rate"], keep_stereo=keep_stereo)
+    # For model input we operate on mono magnitude/phase
+    if keep_stereo and wav.ndim == 2 and wav.size(0) > 1:
+        wav_mono = wav.mean(dim=0)
+    else:
+        wav_mono = wav if wav.ndim == 1 else wav.squeeze(0)
+    mag, phase = proc.stft(wav_mono)
     mag_norm, s_min, s_max = proc.normalize_mag(mag)
 
     with torch.no_grad():
@@ -112,12 +120,36 @@ def main():
             )
         else:
             instrumental_norm = model.generate_instrumental(mix_bchw, **gen_kwargs)
-        # vocals = mix - instrumental in normalized space
+        # vocals = mix - instrumental in normalized space (mono magnitude)
         vocals_norm = torch.clamp(mix_bchw - instrumental_norm, -1.0, 1.0)
-        vocals_mag = proc.denormalize_mag(vocals_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
-        vocals_wav = proc.istft(vocals_mag, phase)
+        vocals_mag_mono = proc.denormalize_mag(vocals_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
 
-    torchaudio.save(args.output, vocals_wav.unsqueeze(0).cpu(), cfg["audio"]["sample_rate"])
+        if keep_stereo and isinstance(wav, torch.Tensor) and wav.ndim == 2 and wav.size(0) > 1:
+            # Compute stereo mixture STFT per channel and build a TF mask from mono prediction
+            # Mask definition: M_v = clamp(vocal_mag / (mixture_mono_mag + eps), 0, 1)
+            eps = 1e-8
+            mix_mono_mag = proc.denormalize_mag(mix_bchw.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+            mask = torch.clamp(vocals_mag_mono / (mix_mono_mag + eps), 0.0, 1.0)
+
+            # Apply mask to each channel complex spectrogram, then iSTFT per channel
+            chans = wav.size(0)
+            ch_wavs = []
+            for ch in range(chans):
+                ch_mag, ch_phase = proc.stft(wav[ch])
+                ch_vocal_mag = torch.clamp(mask * ch_mag, min=0.0)
+                ch_vocal_wav = proc.istft(ch_vocal_mag, ch_phase)
+                # Pad to input length for safety
+                if ch_vocal_wav.shape[-1] < wav.shape[-1]:
+                    pad = wav.shape[-1] - ch_vocal_wav.shape[-1]
+                    ch_vocal_wav = torch.nn.functional.pad(ch_vocal_wav, (0, pad))
+                ch_wavs.append(ch_vocal_wav[: wav.shape[-1]])
+            vocals_wav = torch.stack(ch_wavs, dim=0)  # (C, T)
+        else:
+            # Mono reconstruction
+            vocals_wav = proc.istft(vocals_mag_mono, phase)
+            vocals_wav = vocals_wav.unsqueeze(0)  # (1, T)
+
+    torchaudio.save(args.output, vocals_wav.cpu(), cfg["audio"]["sample_rate"])
     print(f"Saved: {args.output}")
 
 

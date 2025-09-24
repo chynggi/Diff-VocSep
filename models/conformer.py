@@ -104,12 +104,19 @@ class ConformerDiffusion(nn.Module):
         dropout: float = 0.0,
         axis: str = "time",  # 'time' | 'freq' | 'mixed'
         time_emb_dim: int = 128,
+        # Memory helpers
+        freq_chunk: Optional[int] = None,  # for axis='time': process frequencies in chunks to cap memory
+        time_chunk: Optional[int] = None,  # for axis='freq': process time in chunks to cap memory
+        use_checkpoint: bool = False,      # gradient checkpointing to reduce memory at extra compute cost
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.d_model = d_model
         self.axis = (axis or "time").lower()
+        self.freq_chunk = freq_chunk
+        self.time_chunk = time_chunk
+        self.use_checkpoint = use_checkpoint
         self.time_mlp = nn.Sequential(
             nn.Linear(time_emb_dim, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
         )
@@ -125,30 +132,62 @@ class ConformerDiffusion(nn.Module):
         h2d = self.in_proj(x)  # (B, D, F, T)
 
         def run_time(h2d: torch.Tensor) -> torch.Tensor:
-            # (B, D, F, T) -> (B*F, T, D)
-            h = h2d.permute(0, 2, 3, 1).contiguous().view(B * F, Tlen, self.d_model)
+            # process along time with optional frequency chunking to reduce memory
             t_emb = self.time_mlp(sinusoidal_embedding(t, self.time_mlp[0].in_features))  # (B, D)
-            t_add = t_emb[:, None, :].repeat(1, F, 1).view(B * F, 1, self.d_model)
-            h = h + t_add
-            for blk in self.blocks:
-                h = blk(h)
-            # project and back to (B, Cout, F, T)
-            y = self.out_linear(h).view(B, F, Tlen, self.out_channels).permute(0, 3, 1, 2).contiguous()
-            return y
+            chunk = self.freq_chunk if (self.freq_chunk and self.freq_chunk > 0) else F
+            y_out = x.new_zeros((B, self.out_channels, F, Tlen))
+
+            def run_blocks(h: torch.Tensor) -> torch.Tensor:
+                # h: (B*Fc, T, D)
+                if self.use_checkpoint and self.training:
+                    for blk in self.blocks:
+                        h = torch.utils.checkpoint.checkpoint(blk, h)
+                else:
+                    for blk in self.blocks:
+                        h = blk(h)
+                return h
+
+            for f0 in range(0, F, chunk):
+                f1 = min(F, f0 + chunk)
+                Fc = f1 - f0
+                # slice and reshape: (B, D, Fc, T) -> (B*Fc, T, D)
+                h = h2d[:, :, f0:f1, :].permute(0, 2, 3, 1).contiguous().view(B * Fc, Tlen, self.d_model)
+                # add time embedding broadcast over frequencies in the chunk
+                t_add = t_emb[:, None, :].repeat(1, Fc, 1).view(B * Fc, 1, self.d_model)
+                h = h + t_add
+                h = run_blocks(h)
+                y = self.out_linear(h).view(B, Fc, Tlen, self.out_channels).permute(0, 3, 1, 2).contiguous()
+                y_out[:, :, f0:f1, :] = y
+            return y_out
 
         def run_freq(h2d: torch.Tensor) -> torch.Tensor:
-            # (B, D, F, T) -> (B*T, F, D)
-            h = h2d.permute(0, 3, 2, 1).contiguous().view(B * Tlen, F, self.d_model)
+            # process along frequency with optional time chunking (safe)
             t_emb = self.time_mlp(sinusoidal_embedding(t, self.time_mlp[0].in_features))  # (B, D)
-            # broadcast time embedding across F, then across T positions implicitly by tiling B times
-            t_add = t_emb[:, None, :].repeat(1, 1, 1).view(B, 1, self.d_model)
-            t_add = t_add.repeat_interleave(Tlen, dim=0)  # (B*T, 1, D)
-            h = h + t_add
-            for blk in self.blocks:
-                h = blk(h)
-            # project and back to (B, Cout, F, T)
-            y = self.out_linear(h).view(B, Tlen, F, self.out_channels).permute(0, 3, 2, 1).contiguous()
-            return y
+            chunk = self.time_chunk if (self.time_chunk and self.time_chunk > 0) else Tlen
+            y_out = x.new_zeros((B, self.out_channels, F, Tlen))
+
+            def run_blocks(h: torch.Tensor) -> torch.Tensor:
+                # h: (B*Tc, F, D)
+                if self.use_checkpoint and self.training:
+                    for blk in self.blocks:
+                        h = torch.utils.checkpoint.checkpoint(blk, h)
+                else:
+                    for blk in self.blocks:
+                        h = blk(h)
+                return h
+
+            for t0 in range(0, Tlen, chunk):
+                t1 = min(Tlen, t0 + chunk)
+                Tc = t1 - t0
+                # slice and reshape: (B, D, F, Tc) -> (B*Tc, F, D)
+                h = h2d[:, :, :, t0:t1].permute(0, 3, 2, 1).contiguous().view(B * Tc, F, self.d_model)
+                # add time embedding (tile across chunked time)
+                t_add = t_emb[:, None, :].view(B, 1, self.d_model).repeat_interleave(Tc, dim=1).view(B * Tc, 1, self.d_model)
+                h = h + t_add
+                h = run_blocks(h)
+                y = self.out_linear(h).view(B, Tc, F, self.out_channels).permute(0, 3, 2, 1).contiguous()
+                y_out[:, :, :, t0:t1] = y
+            return y_out
 
         if self.axis == "time":
             return run_time(h2d)
@@ -166,7 +205,10 @@ class ConformerDiffusion(nn.Module):
                 ht = h.permute(0, 2, 3, 1).contiguous().view(B * F, Tlen, self.d_model)
                 t_add = t_emb[:, None, :].repeat(1, F, 1).view(B * F, 1, self.d_model)
                 ht = ht + t_add
-                ht = blk(ht)
+                if self.use_checkpoint and self.training:
+                    ht = torch.utils.checkpoint.checkpoint(blk, ht)
+                else:
+                    ht = blk(ht)
                 h = ht.view(B, F, Tlen, self.d_model).permute(0, 3, 1, 2).contiguous()
             else:
                 # freq axis
@@ -174,7 +216,10 @@ class ConformerDiffusion(nn.Module):
                 t_add = t_emb[:, None, :].repeat(1, 1, 1).view(B, 1, self.d_model)
                 t_add = t_add.repeat_interleave(Tlen, dim=0)
                 hf = hf + t_add
-                hf = blk(hf)
+                if self.use_checkpoint and self.training:
+                    hf = torch.utils.checkpoint.checkpoint(blk, hf)
+                else:
+                    hf = blk(hf)
                 h = hf.view(B, Tlen, F, self.d_model).permute(0, 3, 2, 1).contiguous()
 
         y = self.out_linear(h.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).contiguous()

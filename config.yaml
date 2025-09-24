@@ -30,10 +30,10 @@ train:
   lr: 2.0e-4
   weight_decay: 1.0e-2
   grad_clip: 1.0
-  amp: false
+  amp: true
   log_interval: 50
   val_every_steps: 75
-  val_batches: 2
+  val_batches: 1
   loss_voc_weight: 0.5
 
 # 확산
@@ -64,6 +64,10 @@ model:
     kernel_size: 31
     dropout: 0.0
     axis: time  # time | freq | mixed
+    # Memory helpers (safe defaults)
+    freq_chunk: 64   # process freq bins in chunks when axis='time' to reduce memory
+    time_chunk: null # set e.g., 128 if axis='freq'
+    use_checkpoint: false
 
 # 로깅/체크포인트
 log:

@@ -73,6 +73,14 @@ python train.py --config config.yaml
 python inference.py --input path\to\mix.wav --output vocals.wav
 ```
 
+스테레오 출력(스테레오 입력 유지):
+```pwsh
+python inference.py --input path\to\mix_stereo.wav --output vocals_stereo.wav --stereo-output
+```
+메모
+- 모델은 모노 스펙트럼으로 악기-only를 추정한 뒤, 모노 보컬 마그니튜드로 TF 마스크를 만들고 이를 각 채널의 복소 스펙트럼에 적용해 스테레오 보컬을 복원합니다(스테레오 이미지 유지).
+- 입력이 모노면 출력도 모노입니다.
+
 세그먼트 추론(긴 파일 권장):
 ```pwsh
 python inference.py --input mix.wav --segment-seconds 8 --overlap-seconds 1
