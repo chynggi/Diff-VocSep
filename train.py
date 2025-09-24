@@ -36,6 +36,7 @@ def main():
         pitch_aug_cfg = cfg["data"].get("pitch_aug", None)
         train_loader = create_musdbhq_loader(
             root_dir=cfg["data"]["musdbhq_root"],
+            subset="Train",
             batch_size=cfg["train"]["batch_size"],
             segment_seconds=cfg["data"]["segment_seconds"],
             sr=cfg["audio"]["sample_rate"],
@@ -49,6 +50,7 @@ def main():
         # val 로더는 간단히 동일 구조에서 batch_size=1로 생성
         val_loader = create_musdbhq_loader(
             root_dir=cfg["data"]["musdbhq_root"],
+            subset="Test",
             batch_size=1,
             segment_seconds=cfg["data"]["segment_seconds"],
             sr=cfg["audio"]["sample_rate"],
@@ -124,11 +126,25 @@ def main():
                 mix = batch["mixture"].to(device)   # (1,1,F,T)
                 acc = batch["accompaniment"].to(device)
                 # 샘플링으로 악기 스펙 추정 -> 보컬 = 혼합 - 악기
+                # Validation-time sampler knobs
+                val_sampler = cfg["diffusion"].get("sampler", None)
+                val_use_ddim = cfg["diffusion"].get("use_ddim", False)
+                val_ddim_steps = cfg["diffusion"].get("val_ddim_steps", cfg["diffusion"].get("ddim_steps", 50))
+                val_eta = cfg["diffusion"].get("eta", 0.0)
+                # optional shallow diffusion for validation
+                shallow_cfg = cfg["diffusion"].get("validate_use_shallow", False)
+                shallow_k = cfg["diffusion"].get("shallow_k", None)
+                add_forward_noise = cfg["diffusion"].get("add_forward_noise", True)
+
                 instrumental_norm = model.generate_instrumental(
                     mix,
-                    use_ddim=cfg["diffusion"].get("use_ddim", False),
-                    ddim_steps=cfg["diffusion"].get("ddim_steps", 50),
-                    eta=cfg["diffusion"].get("eta", 0.0),
+                    use_ddim=val_use_ddim,
+                    ddim_steps=val_ddim_steps,
+                    eta=val_eta,
+                    sampler=val_sampler,
+                    shallow_init=(mix if shallow_cfg else None),
+                    k_step=shallow_k,
+                    add_forward_noise=add_forward_noise,
                 )
                 vocals_est_norm = torch.clamp(mix - instrumental_norm, -1.0, 1.0)
 
@@ -162,12 +178,18 @@ def main():
                 voc_mag = proc.denormalize_mag(vocals_est_norm.squeeze(0).squeeze(0).cpu(), s_min, s_max)
                 voc_wav = proc.istft(voc_mag, mix_phase).numpy()
 
-                # GT 보컬 파형이 없어서 proxy로 mixture - accompaniment(denorm, iSTFT)를 사용
-                acc_mag = proc.denormalize_mag(acc.squeeze(0).squeeze(0).cpu(), s_min, s_max)
-                acc_wav = proc.istft(acc_mag, mix_phase).numpy()
-                mix_mag = proc.denormalize_mag(mix.squeeze(0).squeeze(0).cpu(), s_min, s_max)
-                mix_wav = proc.istft(mix_mag, mix_phase).numpy()
-                target_voc = mix_wav - acc_wav
+                # GT 보컬 스펙트럼이 제공되므로 이를 직접 복원하여 평가 대상 생성
+                voc_gt = batch.get("vocals", None)
+                if voc_gt is not None:
+                    voc_gt_mag = proc.denormalize_mag(voc_gt.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                    target_voc = proc.istft(voc_gt_mag, mix_phase).numpy()
+                else:
+                    # Fallback: mixture - accompaniment
+                    acc_mag = proc.denormalize_mag(acc.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                    acc_wav = proc.istft(acc_mag, mix_phase).numpy()
+                    mix_mag = proc.denormalize_mag(mix.squeeze(0).squeeze(0).cpu(), s_min, s_max)
+                    mix_wav = proc.istft(mix_mag, mix_phase).numpy()
+                    target_voc = mix_wav - acc_wav
 
                 m = evaluate_waveforms(voc_wav, target_voc, sr=cfg["audio"]["sample_rate"], use_museval=False)
                 sdr = m.get("SDR", float("nan"))
@@ -210,7 +232,9 @@ def main():
                 x_t = model.diffusion.q_sample(x_start, t, noise=noise)
                 x_in = torch.cat([x_t, mix], dim=1)
                 pred_noise = model(x_in, t)
-                loss_cf = torch.nn.functional.l1_loss(pred_noise, noise)
+                # weights
+                w_cf = float(cfg["train"].get("loss_cf_weight", 1.0))
+                loss_cf = w_cf * torch.nn.functional.l1_loss(pred_noise, noise)
 
                 # Add secondary vocal separation objective in spec domain (optional)
                 # Estimate instruments via one reverse step preview (cheap): use current x_t prediction to approximate x0

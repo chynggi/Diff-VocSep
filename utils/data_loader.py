@@ -67,9 +67,10 @@ class MUSDB18Dataset(Dataset):
         voc_mag, _ = self.processor.stft(vocals)
         acc_mag, _ = self.processor.stft(accompaniment)
 
+        # Normalize EVERYTHING with mixture stats so subtraction is valid
         mix_norm, mix_min, mix_max = self.processor.normalize_mag(mix_mag)
-        voc_norm, _, _ = self.processor.normalize_mag(voc_mag)
-        acc_norm, _, _ = self.processor.normalize_mag(acc_mag)
+        voc_norm = self.processor.normalize_mag_with_stats(voc_mag, mix_min, mix_max)
+        acc_norm = self.processor.normalize_mag_with_stats(acc_mag, mix_min, mix_max)
 
         return {
             "mixture": mix_norm.unsqueeze(0),
@@ -101,6 +102,7 @@ class MusDB18HQ(Dataset):
     def __init__(
         self,
         dataset_path: str | Path,
+        subset: str | None = None,
         sep_filenames: tuple = ("drums", "bass", "vocals", "other"),
         segment_seconds: Optional[float] = 4.0,
         sr: int = 44100,
@@ -112,8 +114,11 @@ class MusDB18HQ(Dataset):
         if isinstance(dataset_path, str):
             dataset_path = Path(dataset_path)
 
+        # If subset provided, narrow the search to that subfolder (e.g., 'Train' or 'Test')
+        base = dataset_path / subset if isinstance(subset, str) and len(subset) > 0 else dataset_path
+
         paths = []
-        mixture_paths = dataset_path.glob("**/*/mixture.wav")
+        mixture_paths = base.glob("**/*/mixture.wav")
         for mixture_path in mixture_paths:
             parent = mixture_path.parent
             if not all((parent / f"{name}.wav").exists() for name in sep_filenames):
@@ -122,6 +127,7 @@ class MusDB18HQ(Dataset):
 
         self.paths = sorted(paths)
         self.sep_filenames = sep_filenames
+        self.subset = subset
         self.segment_seconds = segment_seconds
         self.sr = sr
         self.processor = AudioProcessor(sr=sr, n_fft=n_fft, hop_length=hop_length, win_length=win_length, center=center)
@@ -191,9 +197,10 @@ class MusDB18HQ(Dataset):
         voc_mag, _ = self.processor.stft(vocals)
         acc_mag, _ = self.processor.stft(accompaniment)
 
+        # Use mixture stats for all stems
         mix_norm, s_min, s_max = self.processor.normalize_mag(mix_mag)
-        voc_norm, _, _ = self.processor.normalize_mag(voc_mag)
-        acc_norm, _, _ = self.processor.normalize_mag(acc_mag)
+        voc_norm = self.processor.normalize_mag_with_stats(voc_mag, s_min, s_max)
+        acc_norm = self.processor.normalize_mag_with_stats(acc_mag, s_min, s_max)
 
         return {
             "mixture": mix_norm.unsqueeze(0),
@@ -204,9 +211,10 @@ class MusDB18HQ(Dataset):
         }
 
 
-def create_musdbhq_loader(root_dir: str | Path, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0, pitch_aug: Optional[Dict] = None) -> DataLoader:
+def create_musdbhq_loader(root_dir: str | Path, subset: str, batch_size: int, segment_seconds: float, sr: int, n_fft: int, hop: int, win_length: int, center: bool, num_workers: int = 0, pitch_aug: Optional[Dict] = None) -> DataLoader:
     dataset = MusDB18HQ(
         dataset_path=root_dir,
+        subset=subset,
         segment_seconds=segment_seconds,
         sr=sr,
         n_fft=n_fft,

@@ -26,14 +26,15 @@ audio:
 # 학습
 train:
   batch_size: 1
-  epochs: 1000
+  epochs: 100
   lr: 2.0e-4
   weight_decay: 1.0e-2
   grad_clip: 1.0
   amp: true
   log_interval: 50
   val_every_steps: 75
-  val_batches: 1
+  val_batches: 8
+  loss_cf_weight: 1.0
   loss_voc_weight: 0.5
 
 # 확산
@@ -44,9 +45,14 @@ diffusion:
   beta_schedule: linear  # linear | cosine
   use_ddim: true
   ddim_steps: 50
+  val_ddim_steps: 50
   eta: 0.0
   # sampler: ddpm | ddim | (future: dpm-solver, unipc)
   sampler: ddim
+  # Validation shallow diffusion options
+  validate_use_shallow: true
+  shallow_k: 50
+  add_forward_noise: true
 
 # 모델
 model:
@@ -60,7 +66,7 @@ model:
     d_model: 128
     n_heads: 4
     d_ff: 256
-    num_layers: 6
+    num_layers: 4
     kernel_size: 31
     dropout: 0.0
     axis: time  # time | freq | mixed
