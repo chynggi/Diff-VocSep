@@ -1,4 +1,5 @@
 import argparse
+import os
 import yaml
 import torch
 import torchaudio
@@ -27,7 +28,10 @@ def parse_args():
 
 
 def main():
-    # lazy import torch_xla
+    # Configure PJRT defaults for torch-xla 2.8+
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
+    # lazy import torch_xla after env setup
     xm = importlib.import_module("torch_xla.core.xla_model")
 
     args = parse_args()

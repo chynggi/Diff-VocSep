@@ -89,8 +89,11 @@ def _build_dataloaders(cfg, device):
     if xm is None:
         raise RuntimeError("torch-xla is required for TPU training. Please install torch-xla and run on a TPU runtime.")
 
-    # Use stable XLA APIs
-    world_size = xm.xrt_world_size()
+    # Use stable XLA APIs (PJRT-first, fallback to legacy XRT)
+    if hasattr(xm, "xla_device_world_size"):
+        world_size = xm.xla_device_world_size()
+    else:
+        world_size = xm.xrt_world_size()
     rank = xm.get_ordinal()
     
     train_sampler = DistributedSampler(
@@ -194,6 +197,9 @@ def _validate(model, val_loader, cfg, device, max_batches=10):
 
 
 def _mp_fn(index, args):
+    # Ensure PJRT is configured by default for torch-xla 2.8+
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -318,6 +324,9 @@ def main():
     args = parse_args()
     if xmp is None:
         raise RuntimeError("torch-xla not found. Install torch-xla and run on a TPU-enabled environment.")
+    # Ensure PJRT defaults for parent process as well
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
     # Use all available TPU cores by default
     xmp.spawn(_mp_fn, args=(args,), nprocs=None, start_method='spawn')
 

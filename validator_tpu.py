@@ -96,6 +96,9 @@ def _evaluate_loop(model, loader, cfg, device, max_batches: int):
 
 
 def _mp_fn(index, args):
+    # Ensure PJRT defaults
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
     xm = importlib.import_module("torch_xla.core.xla_model")
     xmp = importlib.import_module("torch_xla.distributed.xla_multiprocessing")
     pl = importlib.import_module("torch_xla.distributed.parallel_loader")
@@ -129,15 +132,23 @@ def _mp_fn(index, args):
     model.eval()
 
     ds = _build_val_loader(cfg)
-    sampler = DistributedSampler(ds, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal(), shuffle=False)
+    if hasattr(xm, "xla_device_world_size"):
+        world_size = xm.xla_device_world_size()
+    else:
+        world_size = xm.xrt_world_size()
+    sampler = DistributedSampler(ds, num_replicas=world_size, rank=xm.get_ordinal(), shuffle=False)
     dl = DataLoader(ds, batch_size=1, sampler=sampler, num_workers=0)
     mp_dl = pl.MpDeviceLoader(dl, device)
 
     total_sdr, count = _evaluate_loop(model, mp_dl, cfg, device, args.max_batches)
 
-    # reduce to master
-    total_sdr = xm.mesh_reduce("sum_sdr", total_sdr, sum)
-    count = xm.mesh_reduce("sum_count", count, sum)
+    # All-reduce across TPU processes (sum) for PJRT compatibility
+    total_sdr_t = torch.tensor([total_sdr], device=device, dtype=torch.float32)
+    count_t = torch.tensor([count], device=device, dtype=torch.float32)
+    total_sdr_t = xm.all_reduce(xm.REDUCE_SUM, [total_sdr_t])[0]
+    count_t = xm.all_reduce(xm.REDUCE_SUM, [count_t])[0]
+    total_sdr = float(total_sdr_t.cpu().item())
+    count = int(count_t.cpu().item())
 
     if xm.is_master_ordinal():
         avg = (total_sdr / max(1, count)) if count > 0 else float("nan")
@@ -146,6 +157,9 @@ def _mp_fn(index, args):
 
 def main():
     args = parse_args()
+    # Ensure PJRT defaults for parent process
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
     xmp = importlib.import_module("torch_xla.distributed.xla_multiprocessing")
     xmp.spawn(_mp_fn, args=(args,), nprocs=None, start_method='spawn')
 
