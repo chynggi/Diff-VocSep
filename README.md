@@ -1,4 +1,4 @@
-# Diff-MSST: Diffusion-based Counterfactual Vocal Separation
+# Diff-VocSep: Diffusion-based Counterfactual Vocal Separation
 
 Minimal runnable scaffold following `diffusion-vocal-separation-guide.md`.
 
