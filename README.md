@@ -243,8 +243,13 @@ $env:XLA_USE_SPMD = "1"
 python train_tpu.py --config config.yaml
 ```
 
+**torch-xla 2.8+ 호환성 노트:**
+- torchrun 사용 권장: `torchrun --nproc_per_node=8 train_tpu.py --config config.yaml`
+- PJRT 환경 변수는 코드에서 자동 설정됩니다
+- xmp.spawn 대신 torchrun을 사용하면 더 안정적인 분산 학습이 가능합니다
+
 메모
-- 분산 학습은 XLA 프로세스별로 자동 스폰됩니다(`xmp.spawn`). 데이터셋은 `DistributedSampler`로 분할됩니다.
+- 분산 학습은 XLA 프로세스별로 자동 스폰됩니다(`xmp.spawn` 또는 `torchrun`). 데이터셋은 `DistributedSampler`로 분할됩니다.
 - AMP는 XLA의 `bfloat16` 자동 캐스트를 사용합니다(`torch.autocast(device_type="xla", dtype=torch.bfloat16)`).
 - 검증/체크포인트는 마스터(rank 0)에서만 수행해 간단히 집계합니다.
 - Colab에서는 런타임 유형을 TPU로 전환 후 위 명령을 실행하세요.

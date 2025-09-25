@@ -132,12 +132,12 @@ def _mp_fn(index, args):
     model.eval()
 
     ds = _build_val_loader(cfg)
-    if hasattr(xm, "xla_device_world_size"):
-        world_size = xm.xla_device_world_size()
-    else:
-        world_size = xm.xrt_world_size()
+    # Use xla_device_world_size() for torch-xla 2.8+ compatibility
+    world_size = xm.xla_device_world_size()
     sampler = DistributedSampler(ds, num_replicas=world_size, rank=xm.get_ordinal(), shuffle=False)
     dl = DataLoader(ds, batch_size=1, sampler=sampler, num_workers=0)
+    # Note: MpDeviceLoader may not be needed with PJRT in torch-xla 2.8+
+    # For now, keeping it for backward compatibility, but consider removing if issues arise
     mp_dl = pl.MpDeviceLoader(dl, device)
 
     total_sdr, count = _evaluate_loop(model, mp_dl, cfg, device, args.max_batches)
@@ -157,9 +157,12 @@ def _mp_fn(index, args):
 
 def main():
     args = parse_args()
-    # Ensure PJRT defaults for parent process
+    # Ensure PJRT defaults for parent process (torch-xla 2.8+ compatibility)
     os.environ.setdefault("PJRT_DEVICE", "TPU")
     os.environ.setdefault("XLA_USE_SPMD", "1")
+    
+    # For torch-xla 2.8+, consider using torchrun instead of xmp.spawn:
+    # torchrun --nproc_per_node=8 validator_tpu.py --config config.yaml
     xmp = importlib.import_module("torch_xla.distributed.xla_multiprocessing")
     xmp.spawn(_mp_fn, args=(args,), nprocs=None, start_method='spawn')
 

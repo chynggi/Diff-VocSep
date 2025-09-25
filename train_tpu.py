@@ -7,10 +7,11 @@ from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, DistributedSampler
 import torch.distributed as dist
+import importlib
 
-# torch_xla는 TPU 환경에서 직접 import합니다.
-import torch_xla.core.xla_model as xm
-import torch_xla.distributed.parallel_loader as pl
+# torch_xla는 TPU 환경에서 lazy import로 사용합니다 (torch-xla 2.8+ PJRT 호환성)
+# import torch_xla.core.xla_model as xm
+# import torch_xla.distributed.parallel_loader as pl
 
 from utils.data_loader import MUSDB18Dataset, MusDB18HQ
 from utils.data_setup import ensure_musdbhq
@@ -94,7 +95,7 @@ def _build_dataloaders(cfg):
         drop_last=False,
     )
 
-    # MpDeviceLoader를 제거하고 표준 DataLoader 사용
+    # MpDeviceLoader를 제거하고 표준 DataLoader 사용 (PJRT 호환성)
     train_loader = DataLoader(
         train_set,
         batch_size=cfg["train"]["batch_size"],
@@ -107,7 +108,10 @@ def _build_dataloaders(cfg):
 
 
 def _validate(model, val_loader, cfg, device, max_batches=10):
-    # Master-only validation은 그대로 유지
+    # Lazy import xm for PJRT compatibility
+    xm = importlib.import_module("torch_xla.core.xla_model")
+    
+    # Master-only validation (PJRT 호환성으로 MpDeviceLoader 사용하지 않음)
     if not xm.is_master_ordinal():
         return float("nan")
 
@@ -184,11 +188,18 @@ def _validate(model, val_loader, cfg, device, max_batches=10):
 
 
 def main():
+    # Configure PJRT defaults for torch-xla 2.8+ compatibility
+    os.environ.setdefault("PJRT_DEVICE", "TPU")
+    os.environ.setdefault("XLA_USE_SPMD", "1")
+    
+    # Lazy import torch_xla after PJRT environment setup (torch-xla 2.8+ compatibility)
+    xm = importlib.import_module("torch_xla.core.xla_model")
+    
     args = parse_args()
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    # 1. 분산 환경 초기화
+    # 1. 분산 환경 초기화 - torchrun 사용시 자동으로 설정됨
     dist.init_process_group("xla")
     device = xm.xla_device()
     rank = dist.get_rank()
@@ -310,5 +321,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # xmp.spawn 대신 torchrun을 사용하므로, main 함수를 직접 호출합니다.
+    # torch-xla 2.8+ 호환성: torchrun 사용 권장 (xmp.spawn 대신)
+    # torchrun --nproc_per_node=8 train_tpu.py --config config.yaml
     main()
